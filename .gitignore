@@ -1,0 +1,26 @@
+## .NET
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Bb]uild[Ll]og.*
+*.user
+*.suo
+*.userprefs
+*.nupkg
+*.snupkg
+artifacts/
+TestResults/
+.vs/
+.vscode/
+.idea/
+project.lock.json
+project.fragment.lock.json
+*.binlog
+
+## OS
+.DS_Store
+Thumbs.db

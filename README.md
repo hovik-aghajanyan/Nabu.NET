@@ -1,0 +1,334 @@
+# Nabu.NET
+
+**Expose the ASP.NET Core Web API you already have as MCP tools by adding one attribute.**
+
+`Nabu.Mcp.AspNetCore` turns existing controller actions into [Model Context Protocol](https://modelcontextprotocol.io)
+tools. It does not ask you to re-declare your endpoints, duplicate validation, or re-implement your
+security model. A tool call is replayed as a real HTTP request through **your application's own
+pipeline**, so authentication, authorization policies, action filters, model binding, model validation,
+exception handlers and every other piece of middleware keep working exactly as they do today.
+
+```csharp
+[HttpGet("{id:guid}")]
+[McpTool]                                   // <- the entire integration
+public ActionResult<TodoItem> GetById(Guid id) => ...
+```
+
+---
+
+## Contents
+
+- [Why replay the pipeline](#why-replay-the-pipeline)
+- [Getting started](#getting-started)
+- [Attributes](#attributes)
+- [How arguments are mapped](#how-arguments-are-mapped)
+- [Schema generation](#schema-generation)
+- [Authentication and authorization](#authentication-and-authorization)
+- [Configuration](#configuration)
+- [Protocol support](#protocol-support)
+- [Target frameworks](#target-frameworks)
+- [Repository layout](#repository-layout)
+- [Building and testing](#building-and-testing)
+- [Limitations](#limitations)
+
+---
+
+## Why replay the pipeline
+
+The obvious way to build this is to reflect over controllers and invoke the action methods directly.
+That approach quietly drops everything that makes an ASP.NET Core action *safe*: `[Authorize]` is
+enforced by middleware and filters, not by the method body; `ModelState` is populated by model binding;
+`[ServiceFilter]`, rate limiting, tenant resolution and exception handling all live outside the method.
+
+Nabu takes the other route. During startup it installs an `IStartupFilter` that captures the fully
+built `RequestDelegate` at the very front of the pipeline. To run a tool it constructs a synthetic
+`HttpContext` for the target route - carrying the caller's identity, forwarded credentials, a fresh DI
+scope and a JSON body built from the tool arguments - and pushes it through that captured pipeline.
+
+The action cannot tell the difference between a tool call and a request from a browser. That is the
+entire design goal, and the test suite asserts it: the same `[Authorize(Policy = "AdminOnly")]` that
+returns 403 over HTTP returns an `isError` tool result over MCP, for the same caller.
+
+## Getting started
+
+### 1. Reference the library
+
+```xml
+<ProjectReference Include="path/to/src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj" />
+```
+
+### 2. Register and mount it
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddAuthentication(/* ... */);
+builder.Services.AddAuthorization(/* ... */);
+
+builder.Services.AddNabuMcp(options =>
+{
+    options.ServerName = "my-api";
+    options.RequireAuthorization = true;   // protect the MCP endpoint itself
+});
+
+var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.UseNabuMcp();      // mount after authentication so the endpoint sees the caller
+app.MapControllers();
+
+app.Run();
+```
+
+`UseNabuMcp()` serves the MCP endpoint at `/mcp` by default. Where you place it only affects the MCP
+endpoint itself - tool calls always traverse the whole pipeline from the top, regardless of position.
+
+### 3. Mark the actions you want to publish
+
+```csharp
+[ApiController]
+[Route("api/todos")]
+[Authorize]
+public class TodosController : ControllerBase
+{
+    /// <summary>Lists the todo items belonging to the signed-in user.</summary>
+    /// <param name="search">Case-insensitive substring matched against the title and notes.</param>
+    [HttpGet]
+    [McpTool]
+    public ActionResult<TodoPage> List([FromQuery] string? search, [FromQuery] int page = 0) => ...
+}
+```
+
+That is the whole setup. The XML `<summary>` becomes the tool description and the `<param>` text
+becomes the argument descriptions, so a well-documented API produces a well-described tool set with no
+extra work. (Set `<GenerateDocumentationFile>true</GenerateDocumentationFile>` to enable it.)
+
+### 4. Talk to it
+
+```bash
+curl -X POST http://localhost:5000/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+```json
+{
+  "name": "todos_get_by_id",
+  "title": "Get By Id",
+  "description": "Fetches a single todo item by its identifier.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid", "description": "Identifier of the item." }
+    },
+    "required": ["id"]
+  },
+  "annotations": {
+    "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false
+  }
+}
+```
+
+## Attributes
+
+| Attribute | Target | Purpose |
+|---|---|---|
+| `[McpTool]` | action | Publishes the action as a tool. |
+| `[McpTool]` | controller | Publishes every action on the controller. |
+| `[McpIgnore]` | controller, action, parameter, property | Excludes it. Always wins. |
+| `[McpParameter]` | parameter, property | Overrides the name, description, requiredness or example of one input. |
+
+`[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, and the four MCP behaviour hints
+`ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to the HTTP semantics of the
+verb - GET is read-only and idempotent, DELETE and PUT are destructive - and any hint you set
+explicitly overrides that default.
+
+```csharp
+[HttpPost("{id:guid}/publish")]
+[McpTool(
+    Name = "publish_article",
+    Description = "Publishes a draft article so it becomes visible to readers.",
+    Idempotent = false,
+    Destructive = true)]
+public IActionResult Publish(Guid id) => ...
+```
+
+## How arguments are mapped
+
+Nabu reads MVC's own binding metadata, so it maps arguments the same way your API already binds them.
+
+| Binding source | Becomes |
+|---|---|
+| `[FromRoute]` / route template token | A URL segment, URL-encoded. |
+| `[FromQuery]` | A query-string entry. Arrays repeat the key; objects use `key.property`. |
+| `[FromBody]` | The JSON request body. |
+| `[FromHeader]` | A request header (opt in with `ExposeHeaderParameters`). |
+| `[FromServices]`, `CancellationToken`, `HttpContext` | Skipped - resolved by the framework. |
+
+When no explicit attribute is present, Nabu infers the source exactly as `[ApiController]` does: route
+tokens first, then body for complex types on POST/PUT/PATCH, then query string.
+
+**Body flattening.** A single complex `[FromBody]` parameter is flattened into the top level of the
+tool schema, so a model fills one flat object instead of a nested wrapper:
+
+```csharp
+public ActionResult<TodoItem> Create([FromBody] CreateTodoRequest request)
+```
+```jsonc
+// arguments: {"title": "...", "priority": "High", "tags": ["a"]}   not  {"request": {...}}
+```
+
+Set `FlattenBodyParameter = false` to keep the wrapper. Types that are not objects - a `[FromBody]
+int[]`, for example - are always sent as the whole body under their parameter name.
+
+## Schema generation
+
+Input schemas are generated from the CLR types and honour:
+
+- primitives, `Guid`, `DateTime`/`DateTimeOffset`/`DateOnly`/`TimeOnly`/`TimeSpan`, `Uri`, `byte[]`
+- `Nullable<T>` and nullable reference types (`string?` is optional, `string` is required)
+- collections, `string`-keyed dictionaries, nested models, with cycle and depth protection
+- `[Required]`, `[Range]`, `[StringLength]`, `[MinLength]`, `[MaxLength]`, `[RegularExpression]`,
+  `[EmailAddress]`, `[Url]`, `[DefaultValue]`, `[Description]`, `[Display]`
+- `[JsonPropertyName]`, `[JsonIgnore]`
+- XML documentation `<summary>` on models and properties
+
+**Enums** are always described to the model by name, because names are what a model can reason about.
+If your API serializes enums as numbers - the default for both System.Text.Json and Newtonsoft.Json -
+Nabu detects that and converts the names back to their numeric values while building the request body,
+including inside nested objects and arrays. Nothing to configure; override it with
+`StringEnumsInRequestBody` if the detection is ever wrong.
+
+## Authentication and authorization
+
+There are two independent layers, and both are enforced.
+
+**The MCP endpoint.** `RequireAuthorization = true` makes `/mcp` itself require an authenticated
+caller, optionally against a named policy (`AuthorizationPolicy`) and specific schemes
+(`AuthenticationSchemes`). Unauthenticated callers get a challenge; authenticated ones without the
+policy get a forbid.
+
+**Each tool call.** Because the synthetic request traverses the real pipeline, the target action's own
+`[Authorize]`, policies, roles, claims and custom filters run untouched. Nabu does not interpret,
+cache or shortcut them.
+
+Identity reaches the action two ways, which reinforce each other:
+
+1. Credentials-bearing headers (`Authorization`, `Cookie`, tracing headers, and anything you add to
+   `ForwardedHeaders` / `ForwardedHeaderPrefixes`) are copied onto the synthetic request, so your
+   authentication middleware re-authenticates it normally.
+2. The `ClaimsPrincipal` established for the MCP request is seeded onto the synthetic context, so
+   schemes whose credentials cannot be replayed from headers alone still work. Authentication
+   middleware overwrites it whenever the forwarded credentials authenticate successfully. Disable with
+   `PropagateUser = false`.
+
+Hop-by-hop and content headers (`Content-Length`, `Transfer-Encoding`, `Accept-Encoding`, `Host`, ...)
+are never forwarded; they are rebuilt for the synthetic request.
+
+> Because the MCP endpoint hands one authenticated caller the ability to invoke every published action,
+> publish deliberately. `[McpTool]` is opt-in for exactly this reason, and `[McpIgnore]` lets you keep
+> an action reachable over HTTP while hiding it from MCP.
+
+## Configuration
+
+All options live on `NabuMcpOptions`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `Path` | `/mcp` | Endpoint path. |
+| `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize`. |
+| `ExposeAllActions` | `false` | Publish every action, not just annotated ones. `[McpIgnore]` still wins. |
+| `RequireAuthorization`, `AuthorizationPolicy`, `AuthenticationSchemes` | off | Protects the MCP endpoint. |
+| `ToolNameFactory` | `controller_action` snake_case | Builds tool names. |
+| `ToolFilter` | none | Last-chance predicate to drop discovered tools. |
+| `FlattenBodyParameter` | `true` | Lift `[FromBody]` model properties to the top level. |
+| `ExposeHeaderParameters` | `false` | Publish `[FromHeader]` parameters as tool inputs. |
+| `ForwardedHeaders`, `ForwardedHeaderPrefixes` | credentials + tracing | Headers copied onto tool requests. |
+| `PropagateUser` | `true` | Seed the caller's principal onto the synthetic request. |
+| `MaxResponseBytes` | 1 MiB | Response bodies above this are truncated and flagged. |
+| `IncludeStructuredContent` | `true` | Emit JSON responses as MCP `structuredContent`. |
+| `TreatErrorStatusAsToolError` | `true` | Map HTTP >= 400 to `isError: true`. |
+| `MaxSchemaDepth` | `8` | Nesting limit for generated schemas. |
+| `UseXmlDocumentation` | `true` | Read `<summary>`/`<param>` from the XML docs file. |
+| `StringEnumsInRequestBody` | auto-detect | Whether the API accepts enum names in JSON bodies. |
+
+## Protocol support
+
+Streamable HTTP transport, JSON-RPC 2.0, protocol revisions `2025-06-18`, `2025-03-26` and
+`2024-11-05` (negotiated at `initialize`).
+
+| Method | Behaviour |
+|---|---|
+| `initialize` | Negotiates the version, advertises the `tools` capability, returns a session id. |
+| `tools/list` | Every discovered tool with its schema and annotations. |
+| `tools/call` | Replays the action; returns text content, `structuredContent`, and `isError`. |
+| `ping` | Answered with an empty result. |
+| `notifications/*` | Accepted with `202` and no body. |
+| `resources/list`, `resources/templates/list`, `prompts/list` | Answered as empty for client compatibility. |
+
+`POST` returns `application/json`, or a single server-sent event when the client accepts only
+`text/event-stream`. Batched arrays are supported. `DELETE` ends a session (the server is stateless, so
+this is a no-op). `GET` returns `405`.
+
+Failures are reported at the right layer: a bad tool name or a missing required argument is a JSON-RPC
+error (`-32602`), while an HTTP error from the action - 400 from validation, 403 from a policy, 404
+from the action - is a successful JSON-RPC response carrying `isError: true`, which is what lets a
+model read and react to it.
+
+## Target frameworks
+
+The library multi-targets `netstandard2.0`, `net6.0` and `net8.0`:
+
+- **netstandard2.0** builds against the ASP.NET Core 2.x packages, so ASP.NET Core 2.1/2.2 apps can use it.
+- **net6.0** and **net8.0** bind to the shared framework, so modern apps pull in no legacy assemblies.
+
+Version-specific APIs are handled at runtime rather than by feature-flagging behaviour: the HTTP verb
+is read through `IActionHttpMethodProvider`, which has been stable since 1.0, and the enum
+representation is detected reflectively so the same code path serves System.Text.Json and
+Newtonsoft.Json.
+
+## Repository layout
+
+```
+src/Nabu.Mcp.AspNetCore/     the framework
+samples/Nabu.Sample.TodoApi/ a JWT-secured todo API wired up with Nabu
+tests/Nabu.Mcp.AspNetCore.Tests/  unit and integration tests
+```
+
+The sample is a working API with JWT bearer authentication, a role-based policy, model validation and
+XML documentation. Two accounts exist, both with the password `password`: `alice` (user) and `root`
+(user + admin).
+
+```bash
+dotnet run --project samples/Nabu.Sample.TodoApi
+# then POST JSON-RPC to http://localhost:5000/mcp
+```
+
+## Building and testing
+
+```bash
+dotnet build          # netstandard2.0 + net6.0 + net8.0
+dotnet test           # 149 tests
+```
+
+The suite covers route template parsing, tool naming, JSON schema generation, argument binding and
+enum coercion as units, and drives the real sample application in memory for discovery, invocation,
+authorization and protocol behaviour - including that a tool call for one user never returns another
+user's data, and that an admin-only action stays admin-only when reached over MCP.
+
+## Limitations
+
+- Actions binding `IFormFile` or form data are skipped, with a warning; tools cannot supply files.
+- Attribute routing is what discovery is built around. Conventionally routed actions fall back to a
+  `{controller}/{action}` path with the remaining arguments in the query string.
+- The server is stateless: no server-initiated notifications, no `listChanged`, no resumable streams.
+- Overloaded actions that generate the same tool name are disambiguated with a numeric suffix and a
+  warning; give them explicit `[McpTool(Name = "...")]` names instead.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

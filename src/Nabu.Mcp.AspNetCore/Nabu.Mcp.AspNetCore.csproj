@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      netstandard2.0 keeps the library usable from ASP.NET Core 2.1/2.2 projects and from
+      any other netstandard2.0 consumer. net6.0/net8.0 assets exist so that modern apps bind
+      against the shared framework instead of dragging the legacy 2.2 packages into their output.
+    -->
+    <TargetFrameworks>netstandard2.0;net6.0;net8.0</TargetFrameworks>
+    <RootNamespace>Nabu.Mcp.AspNetCore</RootNamespace>
+    <AssemblyName>Nabu.Mcp.AspNetCore</AssemblyName>
+    <PackageId>Nabu.Mcp.AspNetCore</PackageId>
+    <Description>
+      Expose existing ASP.NET Core Web API actions as Model Context Protocol (MCP) tools by adding a
+      single [McpTool] attribute. Tool calls are replayed through the application's own HTTP pipeline,
+      so authentication, authorization, filters, model binding and validation all keep working.
+    </Description>
+    <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.2.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.2.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Routing" Version="2.2.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Authorization" Version="2.2.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Abstractions" Version="2.2.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Core" Version="2.2.5" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="2.2.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="2.2.0" />
+  </ItemGroup>
+
+  <!-- JsonNode.GetValueKind() and friends landed in System.Text.Json 6/8; net8.0 has them in-box. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net6.0'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'netstandard2.0'">
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nabu.Mcp.AspNetCore.Tests" />
+  </ItemGroup>
+
+</Project>
