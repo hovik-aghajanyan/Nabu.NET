@@ -7,11 +7,30 @@ namespace Nabu.Mcp.AspNetCore
     /// class - as a Model Context Protocol tool.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The action keeps behaving like a normal MVC action. Nabu does not call the method directly;
     /// it replays a synthetic HTTP request through the application pipeline, so filters,
     /// authentication, authorization, model binding and validation all still run.
+    /// </para>
+    /// <para>
+    /// The attribute may be applied several times to the same action. Each occurrence publishes a
+    /// separate tool over the same action, which is how one endpoint is exposed under several names
+    /// with different parameter sets - see <see cref="IncludeParameters"/>,
+    /// <see cref="ExcludeParameters"/> and <see cref="ConstantParameters"/>.
+    /// </para>
     /// </remarks>
-    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
+    /// <example>
+    /// <code>
+    /// [HttpGet]
+    /// [McpTool("todos_search", Description = "Search todo items with the full filter set.")]
+    /// [McpTool("todos_list_overdue",
+    ///     Description = "List the overdue todo items.",
+    ///     ExcludeParameters = new[] { "search", "priority" },
+    ///     ConstantParameters = new[] { "isCompleted=false", "pageSize=100" })]
+    /// public ActionResult&lt;TodoPage&gt; List(bool? isCompleted, TodoPriority? priority, string? search, int page = 0, int pageSize = 20)
+    /// </code>
+    /// </example>
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true, Inherited = true)]
     public sealed class McpToolAttribute : Attribute
     {
         private bool? _readOnly;
@@ -49,6 +68,46 @@ namespace Nabu.Mcp.AspNetCore
         /// Useful for feature flags applied at build time.
         /// </summary>
         public bool Enabled { get; set; } = true;
+
+        /// <summary>
+        /// Restricts the tool to this set of inputs; everything else the action accepts is hidden and
+        /// left unset. <c>null</c> or empty means "expose every input", which is the default.
+        /// </summary>
+        /// <remarks>
+        /// Names match either the tool input name (camelCase, as it appears in the schema) or the
+        /// underlying binding name, case-insensitively. <see cref="ConstantParameters"/> entries are
+        /// applied regardless of this list.
+        /// </remarks>
+        public string[]? IncludeParameters { get; set; }
+
+        /// <summary>
+        /// Hides these inputs from the tool schema. They are left unset on the request, so the action's
+        /// own defaults apply. Applied after <see cref="IncludeParameters"/>.
+        /// </summary>
+        public string[]? ExcludeParameters { get; set; }
+
+        /// <summary>
+        /// Pins inputs to fixed values, in <c>name=value</c> form (for example
+        /// <c>"isCompleted=false"</c>). Pinned inputs disappear from the tool schema and the value is
+        /// always sent on the underlying request, so a single action can back several narrower tools.
+        /// </summary>
+        /// <remarks>
+        /// The value is converted to the parameter's CLR type: numbers and booleans become JSON
+        /// numbers and booleans, complex parameters accept a JSON literal, and everything else is sent
+        /// as a string. A bare name with no <c>=</c> pins the parameter to an empty string.
+        /// </remarks>
+        public string[]? ConstantParameters { get; set; }
+
+        /// <summary>
+        /// Marks these inputs as required for this tool even when the action treats them as optional.
+        /// </summary>
+        public string[]? RequiredParameters { get; set; }
+
+        /// <summary>
+        /// Marks these inputs as optional for this tool. Route tokens that the route template cannot
+        /// do without stay required regardless.
+        /// </summary>
+        public string[]? OptionalParameters { get; set; }
 
         /// <summary>
         /// <c>readOnlyHint</c> annotation. Defaults to <c>true</c> for GET/HEAD actions.

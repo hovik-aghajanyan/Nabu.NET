@@ -38,6 +38,18 @@ namespace Nabu.Sample.TodoApi.Controllers
         /// <param name="pageSize">Number of items per page, between 1 and 100.</param>
         [HttpGet]
         [McpTool]
+        [McpTool(
+            "todos_list_open",
+            Title = "List open todos",
+            Description = "Lists the todo items that are still open. Completed items are never returned.",
+            ExcludeParameters = new[] { "search", "priority" },
+            ConstantParameters = new[] { "isCompleted=false" })]
+        [McpTool(
+            "todos_search",
+            Title = "Search todos",
+            Description = "Searches the signed-in user's todo items by title and notes.",
+            IncludeParameters = new[] { "search", "page", "pageSize" },
+            RequiredParameters = new[] { "search" })]
         public ActionResult<TodoPage> List(
             [FromQuery] bool? isCompleted,
             [FromQuery] TodoPriority? priority,

@@ -1,0 +1,132 @@
+name: Release
+
+# Publishing is driven entirely by tags: push `v1.2.3` and that exact version is built, tested,
+# packed and pushed to nuget.org. The tag is the single source of truth for the package version,
+# so `VersionPrefix` in Directory.Build.props never has to be kept in sync by hand.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (for example 1.2.3)."
+        required: true
+        type: string
+      dry_run:
+        description: "Build and pack, but do not push to nuget.org."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_SOURCE: https://api.nuget.org/v3/index.json
+
+jobs:
+  publish:
+    name: Pack and publish to NuGet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            version="${INPUT_VERSION#v}"
+          else
+            version="${TAG_NAME#v}"
+          fi
+
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'${version}' is not a valid package version. Tag releases as v<major>.<minor>.<patch>[-prerelease]." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          case "${version}" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Publishing version ${version}."
+
+      - name: Restore
+        run: dotnet restore Nabu.NET.sln
+
+      - name: Build
+        run: >-
+          dotnet build Nabu.NET.sln
+          --configuration Release
+          --no-restore
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+
+      - name: Test
+        run: >-
+          dotnet test Nabu.NET.sln
+          --configuration Release
+          --no-build
+          -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Pack
+        run: >-
+          dotnet pack src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj
+          --configuration Release
+          --no-build
+          --output artifacts
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:ContinuousIntegrationBuild=true
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ steps.version.outputs.version }}
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Push to NuGet
+        if: ${{ !inputs.dry_run }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NUGET_API_KEY}" ]; then
+            echo "::error::The NUGET_API_KEY repository secret is not set, so there is nothing to authenticate with." >&2
+            exit 1
+          fi
+
+          # The matching .snupkg is picked up automatically alongside each .nupkg.
+          dotnet nuget push "artifacts/*.nupkg" \
+            --api-key "${NUGET_API_KEY}" \
+            --source "${NUGET_SOURCE}" \
+            --skip-duplicate
+
+      - name: Create the GitHub release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          --title "${{ github.ref_name }}"
+          --generate-notes
+          ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }}
+          artifacts/*

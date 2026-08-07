@@ -130,10 +130,10 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     continue;
                 }
 
-                McpToolDescriptor? tool;
+                List<McpToolDescriptor> tools;
                 try
                 {
-                    tool = TryCreateTool(action, used);
+                    tools = CreateTools(action, used);
                 }
                 catch (Exception ex)
                 {
@@ -145,57 +145,73 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     continue;
                 }
 
-                if (tool == null)
+                foreach (var tool in tools)
                 {
-                    continue;
-                }
+                    if (_options.ToolFilter != null && !_options.ToolFilter(tool))
+                    {
+                        continue;
+                    }
 
-                if (_options.ToolFilter != null && !_options.ToolFilter(tool))
-                {
-                    continue;
+                    results.Add(tool);
                 }
-
-                results.Add(tool);
             }
 
             results.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
             return results;
         }
 
-        private McpToolDescriptor? TryCreateTool(ControllerActionDescriptor action, ISet<string> usedNames)
+        /// <summary>
+        /// Builds every tool an action contributes. An action carrying several <see cref="McpToolAttribute"/>
+        /// occurrences yields one tool per occurrence, each with its own name and parameter set.
+        /// </summary>
+        private List<McpToolDescriptor> CreateTools(ControllerActionDescriptor action, ISet<string> usedNames)
         {
+            var empty = new List<McpToolDescriptor>();
             var method = action.MethodInfo;
             var controllerType = action.ControllerTypeInfo;
 
             if (method.GetCustomAttribute<McpIgnoreAttribute>() != null ||
                 controllerType.GetCustomAttribute<McpIgnoreAttribute>() != null)
             {
-                return null;
+                return empty;
             }
 
-            var methodAttribute = method.GetCustomAttribute<McpToolAttribute>(inherit: true);
-            var controllerAttribute = controllerType.GetCustomAttribute<McpToolAttribute>(inherit: true);
-            var attribute = methodAttribute ?? controllerAttribute;
+            var methodAttributes = method.GetCustomAttributes<McpToolAttribute>(inherit: true).ToList();
+            var controllerAttributes = controllerType.GetCustomAttributes<McpToolAttribute>(inherit: true).ToList();
+            var controllerAttribute = controllerAttributes.Count > 0 ? controllerAttributes[0] : null;
 
-            if (attribute == null && !_options.ExposeAllActions)
-            {
-                return null;
-            }
+            // A controller-wide [McpTool] is a default for the actions that carry none of their own; an
+            // action that declares its own variants replaces it rather than adding to it.
+            var isMethodLevel = methodAttributes.Count > 0;
+            var variants = new List<McpToolAttribute?>();
+            variants.AddRange(isMethodLevel ? methodAttributes : controllerAttributes);
 
-            if (attribute != null && !attribute.Enabled)
+            if (variants.Count == 0)
             {
-                return null;
-            }
+                if (!_options.ExposeAllActions)
+                {
+                    return empty;
+                }
 
-            if (attribute == null)
-            {
                 // Blanket exposure still respects the API explorer opt-out.
                 var apiExplorer = method.GetCustomAttribute<ApiExplorerSettingsAttribute>()
                                   ?? controllerType.GetCustomAttribute<ApiExplorerSettingsAttribute>();
                 if (apiExplorer != null && apiExplorer.IgnoreApi)
                 {
-                    return null;
+                    return empty;
                 }
+
+                variants.Add(null);
+            }
+
+            if (variants.Count > 1 && variants.Count(v => string.IsNullOrEmpty(v?.Name)) > 1)
+            {
+                _logger.LogWarning(
+                    "Nabu MCP found {Count} [McpTool] attributes on {Controller}.{Action} without an explicit Name. " +
+                    "Give each variant a name, otherwise all but the first are published under a generated '_2', '_3', ... suffix.",
+                    variants.Count,
+                    action.ControllerName,
+                    action.ActionName);
             }
 
             var httpMethod = ResolveHttpMethod(action);
@@ -206,26 +222,266 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     "Nabu MCP skipped {Controller}.{Action}: no route template could be resolved. Attribute routing is required.",
                     action.ControllerName,
                     action.ActionName);
-                return null;
+                return empty;
             }
 
-            var parameters = new List<McpToolParameterDescriptor>();
-            if (!TryBuildParameters(action, httpMethod, routeTemplate, parameters))
+            var allParameters = new List<McpToolParameterDescriptor>();
+            if (!TryBuildParameters(action, httpMethod, routeTemplate, allParameters))
             {
-                return null;
+                return empty;
             }
 
-            var inputSchema = BuildInputSchema(parameters);
-            var annotations = BuildAnnotations(attribute, methodAttribute, httpMethod, action);
-            var name = ResolveName(action, methodAttribute, httpMethod, routeTemplate, usedNames);
+            var results = new List<McpToolDescriptor>(variants.Count);
 
-            var tool = new McpToolDescriptor(name, httpMethod, routeTemplate, action, parameters, inputSchema, annotations)
+            foreach (var attribute in variants)
             {
-                Description = ResolveDescription(action, methodAttribute, controllerAttribute, httpMethod, routeTemplate),
-                ConstantRouteValues = new Dictionary<string, string?>(action.RouteValues, StringComparer.OrdinalIgnoreCase),
+                if (attribute != null && !attribute.Enabled)
+                {
+                    continue;
+                }
+
+                List<McpToolParameterDescriptor> parameters;
+                List<McpToolConstantDescriptor> constants;
+                if (!TryApplyVariant(action, attribute, routeTemplate, allParameters, out parameters, out constants))
+                {
+                    continue;
+                }
+
+                var methodAttribute = isMethodLevel ? attribute : null;
+                var inputSchema = BuildInputSchema(parameters);
+                var annotations = BuildAnnotations(attribute, methodAttribute, httpMethod, action);
+                var name = ResolveName(action, methodAttribute, httpMethod, routeTemplate, usedNames);
+
+                results.Add(new McpToolDescriptor(name, httpMethod, routeTemplate, action, parameters, inputSchema, annotations)
+                {
+                    Description = ResolveDescription(action, methodAttribute, controllerAttribute, httpMethod, routeTemplate),
+                    ConstantRouteValues = new Dictionary<string, string?>(action.RouteValues, StringComparer.OrdinalIgnoreCase),
+                    Constants = constants,
+                });
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Narrows the action's full input list down to the set one <see cref="McpToolAttribute"/> asks for.
+        /// Returns <c>false</c> when the variant cannot produce a callable tool.
+        /// </summary>
+        private bool TryApplyVariant(
+            ControllerActionDescriptor action,
+            McpToolAttribute? attribute,
+            string routeTemplate,
+            IReadOnlyList<McpToolParameterDescriptor> allParameters,
+            out List<McpToolParameterDescriptor> parameters,
+            out List<McpToolConstantDescriptor> constants)
+        {
+            parameters = new List<McpToolParameterDescriptor>(allParameters.Count);
+            constants = new List<McpToolConstantDescriptor>();
+
+            if (attribute == null)
+            {
+                parameters.AddRange(allParameters);
+                return true;
+            }
+
+            var include = BuildNameSet(attribute.IncludeParameters);
+            var exclude = BuildNameSet(attribute.ExcludeParameters);
+            var required = BuildNameSet(attribute.RequiredParameters);
+            var optional = BuildNameSet(attribute.OptionalParameters);
+            var pinned = BuildConstantMap(attribute, action);
+
+            WarnAboutUnknownNames(action, allParameters, include, exclude, required, optional, pinned?.Keys);
+
+            foreach (var parameter in allParameters)
+            {
+                // The route template renders every token it still contains, so dropping one of those
+                // inputs without pinning it would produce a tool that can never be invoked.
+                var isRequiredRouteToken = parameter.Source == McpParameterSource.Route &&
+                                           RouteTemplateHelper.ContainsToken(routeTemplate, parameter.BindingName);
+
+                string? constantText;
+                if (TryMatch(pinned, parameter, out constantText))
+                {
+                    var value = McpConstantValue.Convert(constantText!, parameter.ParameterType);
+                    if (value == null && isRequiredRouteToken)
+                    {
+                        _logger.LogWarning(
+                            "Nabu MCP skipped a [McpTool] variant on {Controller}.{Action}: route parameter '{Parameter}' " +
+                            "was pinned to an empty value but '{Template}' cannot be built without it.",
+                            action.ControllerName,
+                            action.ActionName,
+                            parameter.Name,
+                            routeTemplate);
+                        return false;
+                    }
+
+                    constants.Add(new McpToolConstantDescriptor(
+                        parameter.BindingName,
+                        parameter.Source,
+                        parameter.ParameterType,
+                        value)
+                    {
+                        IsBodyRoot = parameter.IsBodyRoot,
+                        ReplacedParameterName = parameter.Name,
+                    });
+
+                    continue;
+                }
+
+                var dropped = (include != null && !Matches(include, parameter)) ||
+                              (exclude != null && Matches(exclude, parameter));
+
+                if (dropped)
+                {
+                    if (isRequiredRouteToken)
+                    {
+                        _logger.LogWarning(
+                            "Nabu MCP skipped a [McpTool] variant on {Controller}.{Action}: route parameter '{Parameter}' " +
+                            "was hidden but '{Template}' cannot be built without it. Pin it with ConstantParameters instead.",
+                            action.ControllerName,
+                            action.ActionName,
+                            parameter.Name,
+                            routeTemplate);
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                var isRequired = parameter.IsRequired;
+                if (required != null && Matches(required, parameter))
+                {
+                    isRequired = true;
+                }
+                else if (optional != null && Matches(optional, parameter))
+                {
+                    isRequired = isRequiredRouteToken;
+                }
+
+                parameters.Add(isRequired == parameter.IsRequired ? parameter : WithRequired(parameter, isRequired));
+            }
+
+            return true;
+        }
+
+        private static McpToolParameterDescriptor WithRequired(McpToolParameterDescriptor parameter, bool isRequired)
+        {
+            return new McpToolParameterDescriptor(
+                parameter.Name,
+                parameter.BindingName,
+                parameter.Source,
+                parameter.ParameterType,
+                isRequired,
+                parameter.Schema)
+            {
+                IsBodyRoot = parameter.IsBodyRoot,
+                Description = parameter.Description,
             };
+        }
 
-            return tool;
+        private static ISet<string>? BuildNameSet(string[]? names)
+        {
+            if (names == null || names.Length == 0)
+            {
+                return null;
+            }
+
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in names)
+            {
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    set.Add(name.Trim());
+                }
+            }
+
+            return set.Count == 0 ? null : set;
+        }
+
+        private IDictionary<string, string>? BuildConstantMap(McpToolAttribute attribute, ControllerActionDescriptor action)
+        {
+            var entries = attribute.ConstantParameters;
+            if (entries == null || entries.Length == 0)
+            {
+                return null;
+            }
+
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var entry in entries)
+            {
+                string name;
+                string value;
+                if (!McpConstantValue.TrySplit(entry, out name, out value))
+                {
+                    _logger.LogWarning(
+                        "Nabu MCP ignored the ConstantParameters entry '{Entry}' on {Controller}.{Action}: expected 'name=value'.",
+                        entry,
+                        action.ControllerName,
+                        action.ActionName);
+                    continue;
+                }
+
+                map[name] = value;
+            }
+
+            return map.Count == 0 ? null : map;
+        }
+
+        /// <summary>A parameter is addressable by its tool input name or by its underlying binding name.</summary>
+        private static bool Matches(ISet<string> names, McpToolParameterDescriptor parameter)
+        {
+            return names.Contains(parameter.Name) || names.Contains(parameter.BindingName);
+        }
+
+        private static bool TryMatch(
+            IDictionary<string, string>? map,
+            McpToolParameterDescriptor parameter,
+            out string? value)
+        {
+            value = null;
+            if (map == null)
+            {
+                return false;
+            }
+
+            return map.TryGetValue(parameter.Name, out value) || map.TryGetValue(parameter.BindingName, out value);
+        }
+
+        /// <summary>
+        /// A misspelled parameter name would otherwise fail silently - the variant would simply expose
+        /// the full parameter set - so every configured name that matches nothing is reported.
+        /// </summary>
+        private void WarnAboutUnknownNames(
+            ControllerActionDescriptor action,
+            IReadOnlyList<McpToolParameterDescriptor> allParameters,
+            params IEnumerable<string>?[] configuredNames)
+        {
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var parameter in allParameters)
+            {
+                known.Add(parameter.Name);
+                known.Add(parameter.BindingName);
+            }
+
+            foreach (var names in configuredNames)
+            {
+                if (names == null)
+                {
+                    continue;
+                }
+
+                foreach (var name in names)
+                {
+                    if (!known.Contains(name))
+                    {
+                        _logger.LogWarning(
+                            "Nabu MCP ignored '{Name}' in an [McpTool] variant on {Controller}.{Action}: the action has no such input.",
+                            name,
+                            action.ControllerName,
+                            action.ActionName);
+                    }
+                }
+            }
         }
 
         private string ResolveName(

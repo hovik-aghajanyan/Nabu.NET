@@ -65,6 +65,41 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public string? Description { get; set; }
     }
 
+    /// <summary>
+    /// A value pinned by the tool rather than supplied by the caller. Constants are invisible to the
+    /// model - they carry no schema - but are always written onto the underlying HTTP request.
+    /// </summary>
+    public sealed class McpToolConstantDescriptor
+    {
+        public McpToolConstantDescriptor(
+            string bindingName,
+            McpParameterSource source,
+            Type parameterType,
+            JsonNode? value)
+        {
+            BindingName = bindingName;
+            Source = source;
+            ParameterType = parameterType;
+            Value = value;
+        }
+
+        /// <summary>Route token, query key, header name, or JSON property inside the request body.</summary>
+        public string BindingName { get; }
+
+        public McpParameterSource Source { get; }
+
+        public Type ParameterType { get; }
+
+        /// <summary>The pinned value, already converted to the shape the action expects.</summary>
+        public JsonNode? Value { get; }
+
+        /// <summary>True when this value <em>is</em> the whole request body.</summary>
+        public bool IsBodyRoot { get; set; }
+
+        /// <summary>The tool input name this constant replaced, kept for diagnostics.</summary>
+        public string? ReplacedParameterName { get; set; }
+    }
+
     /// <summary>MCP tool annotations, mapped from HTTP semantics unless overridden.</summary>
     public sealed class McpToolAnnotations
     {
@@ -113,11 +148,19 @@ namespace Nabu.Mcp.AspNetCore.Discovery
 
         public ControllerActionDescriptor Action { get; }
 
+        /// <summary>Inputs the caller supplies. Excludes anything pinned through <see cref="Constants"/>.</summary>
         public IReadOnlyList<McpToolParameterDescriptor> Parameters { get; }
 
         public JsonObject InputSchema { get; }
 
         public McpToolAnnotations Annotations { get; }
+
+        /// <summary>
+        /// Values fixed by the tool definition and written onto every request, on top of whatever the
+        /// caller supplied. Populated from <see cref="McpToolAttribute.ConstantParameters"/>.
+        /// </summary>
+        public IReadOnlyList<McpToolConstantDescriptor> Constants { get; set; } =
+            new McpToolConstantDescriptor[0];
 
         /// <summary>
         /// Route values needed by endpoint matching in addition to the ones taken from the template
