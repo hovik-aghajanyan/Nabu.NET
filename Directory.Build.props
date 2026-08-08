@@ -7,14 +7,28 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
-    <Authors>Nabu.NET contributors</Authors>
+    <Authors>Hovik Aghajanyan</Authors>
+    <Company>Hovik Aghajanyan</Company>
     <Product>Nabu.NET</Product>
-    <Copyright>Copyright (c) Nabu.NET contributors</Copyright>
+    <Copyright>Copyright (c) Hovik Aghajanyan</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://aghajanyan.me</PackageProjectUrl>
     <RepositoryUrl>https://github.com/hovik-aghajanyan/nabu.net</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <VersionPrefix>1.0.0</VersionPrefix>
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!--
+    Source Link: ships the repository coordinates and untracked sources in the symbol package so
+    consumers can step into the library. The .NET 8 SDK provides the GitHub provider in-box.
+  -->
+  <PropertyGroup>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
 </Project>

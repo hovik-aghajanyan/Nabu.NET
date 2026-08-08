@@ -1,5 +1,9 @@
 # Nabu.NET
 
+[![CI](https://github.com/hovik-aghajanyan/nabu.net/actions/workflows/ci.yml/badge.svg)](https://github.com/hovik-aghajanyan/nabu.net/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/Nabu.Mcp.AspNetCore.svg)](https://www.nuget.org/packages/Nabu.Mcp.AspNetCore)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Expose the ASP.NET Core Web API you already have as MCP tools by adding one attribute.**
 
 `Nabu.Mcp.AspNetCore` turns existing controller actions into [Model Context Protocol](https://modelcontextprotocol.io)
@@ -21,6 +25,7 @@ public ActionResult<TodoItem> GetById(Guid id) => ...
 - [Why replay the pipeline](#why-replay-the-pipeline)
 - [Getting started](#getting-started)
 - [Attributes](#attributes)
+- [One action, several tools](#one-action-several-tools)
 - [How arguments are mapped](#how-arguments-are-mapped)
 - [Schema generation](#schema-generation)
 - [Authentication and authorization](#authentication-and-authorization)
@@ -29,6 +34,7 @@ public ActionResult<TodoItem> GetById(Guid id) => ...
 - [Target frameworks](#target-frameworks)
 - [Repository layout](#repository-layout)
 - [Building and testing](#building-and-testing)
+- [Releasing](#releasing)
 - [Limitations](#limitations)
 
 ---
@@ -137,7 +143,7 @@ curl -X POST http://localhost:5000/mcp \
 
 | Attribute | Target | Purpose |
 |---|---|---|
-| `[McpTool]` | action | Publishes the action as a tool. |
+| `[McpTool]` | action | Publishes the action as a tool. Repeatable - see [One action, several tools](#one-action-several-tools). |
 | `[McpTool]` | controller | Publishes every action on the controller. |
 | `[McpIgnore]` | controller, action, parameter, property | Excludes it. Always wins. |
 | `[McpParameter]` | parameter, property | Overrides the name, description, requiredness or example of one input. |
@@ -156,6 +162,72 @@ explicitly overrides that default.
     Destructive = true)]
 public IActionResult Publish(Guid id) => ...
 ```
+
+## One action, several tools
+
+A single endpoint is often the wrong shape for a model. `GET /api/todos` with five optional filters is
+easy for a client that already knows what it wants and awkward for a model that has to guess. Apply
+`[McpTool]` more than once and the same action is published as several tools, each with its own name,
+description and parameter set - without adding controller actions, and with the same pipeline replay
+behind every one of them.
+
+```csharp
+[HttpGet]
+[McpTool]                                                       // the full endpoint, unchanged
+[McpTool("todos_list_open",
+    Title = "List open todos",
+    Description = "Lists the todo items that are still open.",
+    ExcludeParameters = new[] { "search", "priority" },
+    ConstantParameters = new[] { "isCompleted=false" })]
+[McpTool("todos_search",
+    Title = "Search todos",
+    Description = "Searches the signed-in user's todo items by title and notes.",
+    IncludeParameters = new[] { "search", "page", "pageSize" },
+    RequiredParameters = new[] { "search" })]
+public ActionResult<TodoPage> List(
+    [FromQuery] bool? isCompleted,
+    [FromQuery] TodoPriority? priority,
+    [FromQuery] string? search,
+    [FromQuery] int page = 0,
+    [FromQuery] int pageSize = 20) => ...
+```
+
+`tools/list` now advertises three tools over one action: `todos_list` takes all five filters,
+`todos_list_open` takes only `page` and `pageSize` and can never return completed items, and
+`todos_search` takes a mandatory `search` plus paging.
+
+| Property | Effect |
+|---|---|
+| `IncludeParameters` | Whitelist. Only these inputs are exposed; everything else is left unset. |
+| `ExcludeParameters` | Hides inputs. They are left unset, so the action's own defaults apply. |
+| `ConstantParameters` | `name=value` pairs. The input disappears from the schema and the value is always sent. |
+| `RequiredParameters` | Marks inputs required for this tool even if the action treats them as optional. |
+| `OptionalParameters` | The reverse. Route tokens the URL cannot be built without stay required. |
+
+Notes:
+
+- Names match either the tool input name (camelCase, as it appears in the schema) or the underlying
+  binding name, case-insensitively. A name that matches nothing is logged as a warning.
+- Constant values are converted to the parameter's CLR type: `pageSize=100` becomes a JSON number,
+  `isCompleted=false` a JSON boolean, a complex parameter accepts a JSON literal such as
+  `tags=["docs","ops"]`, and everything else is sent as a string. On a non-string parameter an empty
+  value or `null` means "send nothing".
+- A constant always wins over an argument that happens to target the same place, so a pinned value
+  cannot be talked out of by the model.
+- Route tokens can be pinned too, which is how an endpoint collapses into a zero-argument tool:
+
+  ```csharp
+  [HttpGet("{city}")]
+  [McpTool]
+  [McpTool("weather_get_yerevan_week", ConstantParameters = new[] { "city=Yerevan", "days=7" })]
+  public ActionResult<IEnumerable<Forecast>> GetForecast(string city, [FromQuery] int days = 3) => ...
+  ```
+
+  Hiding a route token *without* pinning it would produce a tool whose URL cannot be built, so Nabu
+  logs a warning and skips that variant rather than publishing something uncallable.
+- Give every extra variant an explicit `Name`. Variants without one fall back to the generated
+  `controller_action` name and collide, and all but the first end up with a `_2`, `_3`, ... suffix.
+- Variants declared on an action replace a controller-wide `[McpTool]` rather than adding to it.
 
 ## How arguments are mapped
 
@@ -297,6 +369,7 @@ Newtonsoft.Json.
 src/Nabu.Mcp.AspNetCore/     the framework
 samples/Nabu.Sample.TodoApi/ a JWT-secured todo API wired up with Nabu
 tests/Nabu.Mcp.AspNetCore.Tests/  unit and integration tests
+.github/workflows/           CI on every push and PR, NuGet publishing on every v* tag
 ```
 
 The sample is a working API with JWT bearer authentication, a role-based policy, model validation and
@@ -312,13 +385,40 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ```bash
 dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 149 tests
+dotnet test           # 180 tests
 ```
 
-The suite covers route template parsing, tool naming, JSON schema generation, argument binding and
-enum coercion as units, and drives the real sample application in memory for discovery, invocation,
-authorization and protocol behaviour - including that a tool call for one user never returns another
-user's data, and that an admin-only action stays admin-only when reached over MCP.
+The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
+constant parsing and enum coercion as units, and drives the real sample application in memory for
+discovery, invocation, authorization and protocol behaviour - including that a tool call for one user
+never returns another user's data, and that an admin-only action stays admin-only when reached over
+MCP.
+
+Every push to `main` and every pull request runs the same build, test and pack on GitHub Actions
+(`.github/workflows/ci.yml`).
+
+## Releasing
+
+Publishing to [nuget.org](https://www.nuget.org/packages/Nabu.Mcp.AspNetCore) is driven by tags. The
+tag is the single source of truth for the package version, so `VersionPrefix` in
+`Directory.Build.props` never has to be kept in sync by hand.
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+`.github/workflows/release.yml` then restores, builds, tests, packs `Nabu.Mcp.AspNetCore` at `1.2.3`,
+pushes the `.nupkg` and its `.snupkg` symbol package to nuget.org, and opens a GitHub release with
+generated notes and the packages attached. A tag containing a hyphen (`v1.2.3-rc.1`) is published as a
+prerelease.
+
+One-time setup: add a nuget.org API key as the **`NUGET_API_KEY`** repository secret
+(*Settings → Secrets and variables → Actions*). Scope it to the `Nabu.Mcp.AspNetCore` package, or to
+`Nabu.*` with "Push new packages and package versions" if the package does not exist yet.
+
+The workflow can also be started manually from the Actions tab with an explicit version, and has a
+`dry_run` option that builds and packs without pushing anything.
 
 ## Limitations
 

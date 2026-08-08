@@ -10,6 +10,7 @@
     <RootNamespace>Nabu.Mcp.AspNetCore</RootNamespace>
     <AssemblyName>Nabu.Mcp.AspNetCore</AssemblyName>
     <PackageId>Nabu.Mcp.AspNetCore</PackageId>
+    <Title>Nabu.NET - MCP tools for ASP.NET Core Web APIs</Title>
     <Description>
       Expose existing ASP.NET Core Web API actions as Model Context Protocol (MCP) tools by adding a
       single [McpTool] attribute. Tool calls are replayed through the application's own HTTP pipeline,
@@ -17,6 +18,11 @@
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.2.2" />

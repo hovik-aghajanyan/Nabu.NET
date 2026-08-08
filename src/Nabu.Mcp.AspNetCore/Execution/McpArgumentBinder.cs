@@ -49,37 +49,83 @@ namespace Nabu.Mcp.AspNetCore.Execution
                     }
                 }
 
-                switch (parameter.Source)
+                Write(
+                    parameter.Source,
+                    parameter.BindingName,
+                    parameter.ParameterType,
+                    parameter.IsBodyRoot,
+                    value,
+                    replaceExisting: false);
+            }
+
+            // Constants are written last so a value pinned by the tool definition always wins over an
+            // argument that happens to bind to the same place.
+            foreach (var constant in tool.Constants)
+            {
+                if (constant.Value == null)
+                {
+                    continue;
+                }
+
+                Write(
+                    constant.Source,
+                    constant.BindingName,
+                    constant.ParameterType,
+                    constant.IsBodyRoot,
+                    constant.Value,
+                    replaceExisting: true);
+            }
+
+            void Write(
+                McpParameterSource source,
+                string bindingName,
+                Type parameterType,
+                bool isBodyRoot,
+                JsonNode? value,
+                bool replaceExisting)
+            {
+                switch (source)
                 {
                     case McpParameterSource.Route:
-                        routeValues[parameter.BindingName] = ToScalar(value) ?? string.Empty;
+                        routeValues[bindingName] = ToScalar(value) ?? string.Empty;
                         break;
 
                     case McpParameterSource.Header:
                         var header = ToScalar(value);
                         if (header != null)
                         {
-                            result.Headers[parameter.BindingName] = header;
+                            result.Headers[bindingName] = header;
                         }
 
                         break;
 
                     case McpParameterSource.Query:
-                        AppendQuery(query, parameter.BindingName, value);
+                        if (replaceExisting)
+                        {
+                            for (var i = query.Count - 1; i >= 0; i--)
+                            {
+                                if (string.Equals(query[i].Key, bindingName, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    query.RemoveAt(i);
+                                }
+                            }
+                        }
+
+                        AppendQuery(query, bindingName, value);
                         break;
 
                     case McpParameterSource.Body:
                         var detached = value == null ? null : JsonNode.Parse(value.ToJsonString());
-                        detached = JsonBodyCoercion.Coerce(detached, parameter.ParameterType, compatibility);
+                        detached = JsonBodyCoercion.Coerce(detached, parameterType, compatibility);
 
-                        if (parameter.IsBodyRoot)
+                        if (isBodyRoot)
                         {
                             bodyRoot = detached;
                         }
                         else
                         {
                             bodyObject ??= new JsonObject();
-                            bodyObject[parameter.BindingName] = detached;
+                            bodyObject[bindingName] = detached;
                         }
 
                         break;

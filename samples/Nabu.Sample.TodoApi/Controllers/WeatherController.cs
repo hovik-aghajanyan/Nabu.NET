@@ -39,6 +39,12 @@ namespace Nabu.Sample.TodoApi.Controllers
         /// <param name="city">Name of the city to forecast.</param>
         /// <param name="days">How many days to forecast, from 1 to 14.</param>
         [HttpGet("{city}")]
+        [McpTool]
+        [McpTool(
+            "weather_get_yerevan_week",
+            Title = "Yerevan week ahead",
+            Description = "Returns the seven day forecast for Yerevan. Takes no arguments.",
+            ConstantParameters = new[] { "city=Yerevan", "days=7" })]
         public ActionResult<IEnumerable<Forecast>> GetForecast(
             string city,
             [FromQuery] [Range(1, 14)] int days = 3)
