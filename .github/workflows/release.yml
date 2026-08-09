@@ -21,6 +21,9 @@ on:
 
 permissions:
   contents: write
+  # Required for NuGet Trusted Publishing: the workflow exchanges a GitHub OIDC
+  # token for a short-lived nuget.org API key, so no long-lived secret exists.
+  id-token: write
 
 env:
   DOTNET_NOLOGO: true
@@ -103,17 +106,21 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
 
+      # Trusted Publishing: exchanges this run's OIDC token for a short-lived API key.
+      # The matching policy on nuget.org is what authorizes this repository + workflow.
+      - name: Log in to NuGet
+        if: ${{ !inputs.dry_run }}
+        id: nuget_login
+        uses: NuGet/login@v1
+        with:
+          user: hovjan
+
       - name: Push to NuGet
         if: ${{ !inputs.dry_run }}
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${NUGET_API_KEY}" ]; then
-            echo "::error::The NUGET_API_KEY repository secret is not set, so there is nothing to authenticate with." >&2
-            exit 1
-          fi
-
           # The matching .snupkg is picked up automatically alongside each .nupkg.
           dotnet nuget push "artifacts/*.nupkg" \
             --api-key "${NUGET_API_KEY}" \

@@ -413,9 +413,10 @@ pushes the `.nupkg` and its `.snupkg` symbol package to nuget.org, and opens a G
 generated notes and the packages attached. A tag containing a hyphen (`v1.2.3-rc.1`) is published as a
 prerelease.
 
-One-time setup: add a nuget.org API key as the **`NUGET_API_KEY`** repository secret
-(*Settings → Secrets and variables → Actions*). Scope it to the `Nabu.Mcp.AspNetCore` package, or to
-`Nabu.*` with "Push new packages and package versions" if the package does not exist yet.
+One-time setup: the workflow authenticates with [NuGet Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing),
+so there is no API key to store. On nuget.org (*username → Trusted Publishing*) create a policy with
+Repository Owner `hovik-aghajanyan`, Repository `Nabu.NET`, Workflow File `release.yml`, and no
+environment. A policy created before the first publish must be used (or re-activated) within 7 days.
 
 The workflow can also be started manually from the Actions tab with an explicit version, and has a
 `dry_run` option that builds and packs without pushing anything.
