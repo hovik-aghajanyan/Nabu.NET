@@ -19,7 +19,6 @@
       so authentication, authorization, filters, model binding and validation all keep working.
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
-    <PackageIcon>oie_9222645SVPEClh5.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
