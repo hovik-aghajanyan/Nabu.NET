@@ -3,9 +3,12 @@
   <PropertyGroup>
     <!--
       netstandard2.0 keeps the library usable from ASP.NET Core 2.1/2.2 projects and from
-      any other netstandard2.0 consumer. net6.0/net8.0 assets exist so that modern apps bind
+      any other netstandard2.0 consumer. The net6.0+ assets exist so that modern apps bind
       against the shared framework instead of dragging the legacy 2.2 packages into their output.
+      Modern hosts must NOT use the netstandard2.0 asset: it cannot provide post-3.0 features
+      such as IHttpResponseBodyFeature on the synthetic request (see McpToolInvoker).
     -->
+    <TargetFrameworks>netstandard2.0;net6.0;net8.0;net10.0</TargetFrameworks>
     <RootNamespace>Nabu.Mcp.AspNetCore</RootNamespace>
     <AssemblyName>Nabu.Mcp.AspNetCore</AssemblyName>
     <PackageId>Nabu.Mcp.AspNetCore</PackageId>
@@ -16,7 +19,6 @@
       so authentication, authorization, filters, model binding and validation all keep working.
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
-    <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,9 +37,14 @@
     <PackageReference Include="Microsoft.Extensions.Options" Version="2.2.0" />
   </ItemGroup>
 
-  <!-- JsonNode.GetValueKind() and friends landed in System.Text.Json 6/8; net8.0 has them in-box. -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' or '$(TargetFramework)' == 'net6.0'">
+  <!-- JsonNode.GetValueKind() and friends landed in System.Text.Json 6/8; net8.0+ has them in-box. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PackageReference Include="System.Text.Json" Version="10.0.10" />
+  </ItemGroup>
+
+  <!-- System.Text.Json 9+ dropped net6.0 support; 8.x is the last line tested on it. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' != 'netstandard2.0'">
