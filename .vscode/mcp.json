@@ -1,0 +1,19 @@
+{
+  "inputs": [
+    {
+      "id": "nabu-token",
+      "type": "promptString",
+      "password": true,
+      "description": "JWT access token from POST http://localhost:5000/api/auth/login (alice or root / password)"
+    }
+  ],
+  "servers": {
+    "nabu-todo-sample": {
+      "type": "http",
+      "url": "http://localhost:5000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${input:nabu-token}"
+      }
+    }
+  }
+}
