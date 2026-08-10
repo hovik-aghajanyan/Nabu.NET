@@ -93,11 +93,16 @@ namespace Nabu.Mcp.AspNetCore
                 sp.GetService<IHttpContextAccessor>(),
                 sp.GetService<ILogger<McpToolInvoker>>()));
 
+            services.TryAddSingleton<IMcpToolAuthorizationEvaluator>(sp => new McpToolAuthorizationEvaluator(
+                sp.GetRequiredService<IOptions<NabuMcpOptions>>(),
+                sp.GetService<ILogger<McpToolAuthorizationEvaluator>>()));
+
             services.TryAddSingleton(sp => new McpRequestHandler(
                 sp.GetRequiredService<IMcpToolRegistry>(),
                 sp.GetRequiredService<IMcpToolInvoker>(),
                 sp.GetRequiredService<IOptions<NabuMcpOptions>>(),
-                sp.GetService<ILogger<McpRequestHandler>>()));
+                sp.GetService<ILogger<McpRequestHandler>>(),
+                sp.GetRequiredService<IMcpToolAuthorizationEvaluator>()));
 
             return services;
         }

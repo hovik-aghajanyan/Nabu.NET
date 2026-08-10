@@ -301,6 +301,108 @@ Identity reaches the action two ways, which reinforce each other:
 Hop-by-hop and content headers (`Content-Length`, `Transfer-Encoding`, `Accept-Encoding`, `Host`, ...)
 are never forwarded; they are rebuilt for the synthetic request.
 
+### Advertising tools per caller
+
+By default every discovered tool is advertised to everyone, and a caller that invokes one it is not
+allowed to use gets the action's own 401 or 403 back as a tool error. That is safe, but it hands the
+model a menu it cannot order from - and a client added before anyone has signed in sees the whole
+catalogue.
+
+`ToolVisibility` tailors `tools/list` to whoever is asking:
+
+```csharp
+options.ToolVisibility = McpToolVisibility.Authorized;
+```
+
+| Value | `tools/list` contains |
+|---|---|
+| `All` (default) | Every discovered tool, whoever is asking. |
+| `Authenticated` | Tools whose actions need authorization, only once the caller is authenticated. |
+| `Authorized` | Tools whose actions need authorization, only once the caller satisfies their policies. |
+
+Nabu reads the requirement during discovery, from the `[Authorize]` and `[AllowAnonymous]` metadata of
+the action, its controller and the filter collection, and resolves it the way `AuthorizationMiddleware`
+would for a real request:
+
+- `[AllowAnonymous]` on the action or the controller wins outright, exactly as it does in MVC.
+- `[Authorize]` - with a policy, roles, or schemes - is combined into a single policy, including a
+  globally registered `AuthorizeFilter`.
+- An action carrying **neither** is not assumed to be public: `AuthorizationOptions.FallbackPolicy`
+  applies to it, so in a secure-by-default application every action is protected until an
+  `[AllowAnonymous]` opts it out, and the tool list says the same.
+
+The resolved policy is then evaluated against the caller with the application's own
+`IAuthorizationPolicyProvider` and `IAuthorizationService`. An unauthenticated caller is therefore
+shown only the tools that need no authorization; the rest appear when it lists the tools again with
+credentials.
+
+Nothing MCP-specific is involved: the attributes that already secure the API are the ones that decide,
+so an action opts out of its controller's `[Authorize]` the same way it always has.
+
+```csharp
+[ApiController]
+[Route("api/todos")]
+[Authorize]                                 // the controller is protected...
+public class TodosController : ControllerBase
+{
+    /// <summary>Lists the priority levels a todo item can be given.</summary>
+    [HttpGet("priorities")]
+    [AllowAnonymous]                        // ...and this one action is not
+    [McpTool]
+    public ActionResult<IEnumerable<string>> GetPriorities() => ...
+}
+```
+
+`todos_get_priorities` is advertised to, and callable by, a caller holding no token; every other todo
+tool waits until it signs in.
+
+This decides what is *advertised*, never what is allowed. A hidden tool that gets called anyway is
+still replayed through the pipeline and still refused by the action, so filtering can never be the only
+thing standing between a caller and an endpoint. When the requirement cannot be worked out - a custom
+filter Nabu cannot see, a missing authorization service - the tool stays visible, because a spurious 403
+is a better failure than a capability that silently disappeared. When authorization depends on something
+no attribute expresses, take the decision over entirely:
+
+```csharp
+services.AddSingleton<IMcpToolAuthorizationEvaluator, MyEvaluator>();
+```
+
+### Adding a client before it has credentials
+
+`RequireAuthorization = true` makes `/mcp` itself reject anonymous callers, which is what triggers the
+OAuth flow in MCP clients that support one - but it also means a client cannot so much as initialize
+until credentials exist. `AnonymousAccess` opens a narrow door in that gate:
+
+| Value | An unauthorized caller may |
+|---|---|
+| `None` (default) | Nothing. Every request is challenged. |
+| `Discovery` | `initialize`, `ping` and the listing methods. `tools/call` is still challenged. |
+| `AnonymousTools` | The above, plus `tools/call` for tools whose actions need no authorization. |
+
+```csharp
+options.RequireAuthorization = true;
+options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+options.ToolVisibility = McpToolVisibility.Authorized;
+```
+
+Now a client added without credentials connects, lists the public tools and can use them; everything
+else is a 401, which is exactly the signal a client needs to start authenticating; and once it does, the
+next `tools/list` returns the full set it is entitled to. Pair the two options as above - `AnonymousAccess`
+on its own would advertise tools the anonymous caller cannot call.
+
+The door is only open to callers that hold no credentials. One that presents a token which is *rejected*
+is challenged as before, so an expired or malformed token is never quietly downgraded to the anonymous
+tool list.
+
+> If the application sets `AuthorizationOptions.FallbackPolicy`, mount `UseNabuMcp()` **before**
+> `UseAuthorization()`. A fallback policy applies to every request that matches no endpoint, and the MCP
+> endpoint is middleware rather than an endpoint, so authorization would otherwise challenge it before
+> Nabu saw it - `AnonymousAccess` included. Tool calls are unaffected either way: they traverse the
+> whole pipeline and meet the fallback policy at the action.
+
+Because the server is stateless it cannot push `notifications/tools/list_changed`, so a client that
+caches the tool list should re-list after authenticating.
+
 > Because the MCP endpoint hands one authenticated caller the ability to invoke every published action,
 > publish deliberately. `[McpTool]` is opt-in for exactly this reason, and `[McpIgnore]` lets you keep
 > an action reachable over HTTP while hiding it from MCP.
@@ -315,6 +417,8 @@ All options live on `NabuMcpOptions`:
 | `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize`. |
 | `ExposeAllActions` | `false` | Publish every action, not just annotated ones. `[McpIgnore]` still wins. |
 | `RequireAuthorization`, `AuthorizationPolicy`, `AuthenticationSchemes` | off | Protects the MCP endpoint. |
+| `ToolVisibility` | `All` | Advertise every tool, or only the ones the caller is authenticated / authorized for. |
+| `AnonymousAccess` | `None` | How much of a protected endpoint an unauthorized caller may reach. |
 | `ToolNameFactory` | `controller_action` snake_case | Builds tool names. |
 | `ToolFilter` | none | Last-chance predicate to drop discovered tools. |
 | `FlattenBodyParameter` | `true` | Lift `[FromBody]` model properties to the top level. |
@@ -376,6 +480,13 @@ The sample is a working API with JWT bearer authentication, a role-based policy,
 XML documentation. Two accounts exist, both with the password `password`: `alice` (user) and `root`
 (user + admin).
 
+It is wired up for per-caller tool visibility, so the ordinary authorization attributes are visible at
+work. Connect without a token and `tools/list` returns the `weather_*` tools, because
+`WeatherController` carries `[AllowAnonymous]`, plus `todos_get_priorities`, because that one action
+carries `[AllowAnonymous]` even though its controller carries `[Authorize]` - and all of them can be
+called. The rest of the `todos_*` tools are neither advertised nor callable until you sign in, and
+`todos_delete` appears only for `root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
+
 ```bash
 dotnet run --project samples/Nabu.Sample.TodoApi
 # then POST JSON-RPC to http://localhost:5000/mcp
@@ -385,14 +496,14 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ```bash
 dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 180 tests
+dotnet test           # 199 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
 constant parsing and enum coercion as units, and drives the real sample application in memory for
 discovery, invocation, authorization and protocol behaviour - including that a tool call for one user
-never returns another user's data, and that an admin-only action stays admin-only when reached over
-MCP.
+never returns another user's data, that an admin-only action stays admin-only when reached over MCP,
+and that a caller is advertised the tools its own credentials reach and no others.
 
 Every push to `main` and every pull request runs the same build, test and pack on GitHub Actions
 (`.github/workflows/ci.yml`).

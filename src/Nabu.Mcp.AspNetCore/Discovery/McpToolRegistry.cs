@@ -8,8 +8,10 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -257,10 +259,80 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     Description = ResolveDescription(action, methodAttribute, controllerAttribute, httpMethod, routeTemplate),
                     ConstantRouteValues = new Dictionary<string, string?>(action.RouteValues, StringComparer.OrdinalIgnoreCase),
                     Constants = constants,
+                    Authorization = ResolveAuthorization(action),
                 });
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// Reads the authorization an action demands, so <c>tools/list</c> can be tailored to the caller.
+        /// </summary>
+        /// <remarks>
+        /// Three sources are merged, because which one carries the metadata depends on the ASP.NET Core
+        /// version and on how the application is wired: attributes on the action, attributes on the
+        /// controller, and the action's filter descriptors - which is where globally registered
+        /// authorization filters show up. As in MVC, an <c>[AllowAnonymous]</c> anywhere in that set wins.
+        /// </remarks>
+        private static McpToolAuthorization ResolveAuthorization(ControllerActionDescriptor action)
+        {
+            var allowAnonymous = false;
+            var authorizeData = new List<IAuthorizeData>();
+            var policies = new List<AuthorizationPolicy>();
+
+            CollectAuthorization(action.ControllerTypeInfo.GetCustomAttributes(inherit: true), ref allowAnonymous, authorizeData);
+            CollectAuthorization(action.MethodInfo.GetCustomAttributes(inherit: true), ref allowAnonymous, authorizeData);
+
+            if (action.FilterDescriptors != null)
+            {
+                foreach (var descriptor in action.FilterDescriptors)
+                {
+                    var filter = descriptor.Filter;
+                    if (filter is IAllowAnonymousFilter)
+                    {
+                        allowAnonymous = true;
+                        continue;
+                    }
+
+                    if (filter is AuthorizeFilter authorizeFilter)
+                    {
+                        if (authorizeFilter.AuthorizeData != null)
+                        {
+                            authorizeData.AddRange(authorizeFilter.AuthorizeData);
+                        }
+
+                        if (authorizeFilter.Policy != null)
+                        {
+                            policies.Add(authorizeFilter.Policy);
+                        }
+
+                        continue;
+                    }
+
+                    if (filter is IAuthorizeData filterData)
+                    {
+                        authorizeData.Add(filterData);
+                    }
+                }
+            }
+
+            return new McpToolAuthorization(allowAnonymous, authorizeData, policies);
+        }
+
+        private static void CollectAuthorization(object[] attributes, ref bool allowAnonymous, List<IAuthorizeData> authorizeData)
+        {
+            foreach (var attribute in attributes)
+            {
+                if (attribute is IAllowAnonymous)
+                {
+                    allowAnonymous = true;
+                }
+                else if (attribute is IAuthorizeData data)
+                {
+                    authorizeData.Add(data);
+                }
+            }
         }
 
         /// <summary>

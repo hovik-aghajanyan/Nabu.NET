@@ -42,12 +42,20 @@ namespace Nabu.Mcp.AspNetCore.Server
                 return;
             }
 
-            if (_options.RequireAuthorization && !await AuthorizeAsync(context).ConfigureAwait(false))
+            var method = context.Request.Method.ToUpperInvariant();
+
+            // A POST is gated after it has been parsed when anonymous access is open, because which
+            // JSON-RPC methods it carries is what decides whether credentials are needed at all.
+            var gateHere = _options.RequireAuthorization &&
+                           (_options.AnonymousAccess == McpAnonymousAccess.None ||
+                            !string.Equals(method, "POST", StringComparison.Ordinal));
+
+            if (gateHere && !await AuthorizeAsync(context).ConfigureAwait(false))
             {
                 return;
             }
 
-            switch (context.Request.Method.ToUpperInvariant())
+            switch (method)
             {
                 case "POST":
                     await HandlePostAsync(context, handler).ConfigureAwait(false);
@@ -129,6 +137,45 @@ namespace Nabu.Mcp.AspNetCore.Server
             return false;
         }
 
+        /// <summary>
+        /// Whether the caller presented credentials that were rejected. The anonymous door is for clients
+        /// that hold none yet; a caller whose token was refused is challenged instead, so that a stale or
+        /// malformed token is never mistaken for a deliberate anonymous request.
+        /// </summary>
+        private async Task<bool> HasRejectedCredentialsAsync(HttpContext context)
+        {
+            if (context.RequestServices?.GetService(typeof(IAuthenticationService)) == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (_options.AuthenticationSchemes.Count == 0)
+                {
+                    var result = await context.AuthenticateAsync().ConfigureAwait(false);
+                    return result?.Failure != null;
+                }
+
+                foreach (var scheme in _options.AuthenticationSchemes)
+                {
+                    var result = await context.AuthenticateAsync(scheme).ConfigureAwait(false);
+                    if (result?.Failure != null)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // No default scheme, or no such scheme. Nothing was rejected because nothing was tried.
+                _logger.LogDebug(ex, "Nabu MCP could not inspect the caller's credentials before answering anonymously.");
+                return false;
+            }
+        }
+
         private async Task ChallengeAsync(HttpContext context)
         {
             if (_options.AuthenticationSchemes.Count == 0)
@@ -183,6 +230,18 @@ namespace Nabu.Mcp.AspNetCore.Server
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(context, JsonRpc.Error(null, McpConstants.InvalidRequest, ex.Message)).ConfigureAwait(false);
                 return;
+            }
+
+            if (_options.RequireAuthorization && _options.AnonymousAccess != McpAnonymousAccess.None)
+            {
+                var needsAuthorization =
+                    await handler.RequiresEndpointAuthorizationAsync(requests, context, context.RequestAborted).ConfigureAwait(false) ||
+                    await HasRejectedCredentialsAsync(context).ConfigureAwait(false);
+
+                if (needsAuthorization && !await AuthorizeAsync(context).ConfigureAwait(false))
+                {
+                    return;
+                }
             }
 
             var responses = new JsonArray();

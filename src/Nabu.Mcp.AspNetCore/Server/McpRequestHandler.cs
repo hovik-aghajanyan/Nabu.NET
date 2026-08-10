@@ -22,17 +22,20 @@ namespace Nabu.Mcp.AspNetCore.Server
         private readonly IMcpToolRegistry _registry;
         private readonly IMcpToolInvoker _invoker;
         private readonly NabuMcpOptions _options;
+        private readonly IMcpToolAuthorizationEvaluator _authorization;
         private readonly ILogger _logger;
 
         public McpRequestHandler(
             IMcpToolRegistry registry,
             IMcpToolInvoker invoker,
             IOptions<NabuMcpOptions> options,
-            ILogger<McpRequestHandler>? logger = null)
+            ILogger<McpRequestHandler>? logger = null,
+            IMcpToolAuthorizationEvaluator? authorization = null)
         {
             _registry = registry ?? throw new ArgumentNullException(nameof(registry));
             _invoker = invoker ?? throw new ArgumentNullException(nameof(invoker));
             _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
+            _authorization = authorization ?? new McpToolAuthorizationEvaluator(options);
             _logger = (ILogger?)logger ?? NullLogger.Instance;
         }
 
@@ -57,7 +60,7 @@ namespace Nabu.Mcp.AspNetCore.Server
                         return JsonRpc.Result(request.Id, new JsonObject());
 
                     case "tools/list":
-                        return JsonRpc.Result(request.Id, ListTools());
+                        return JsonRpc.Result(request.Id, await ListToolsAsync(context, cancellationToken).ConfigureAwait(false));
 
                     case "tools/call":
                         return JsonRpc.Result(request.Id, await CallToolAsync(request, context, cancellationToken).ConfigureAwait(false));
@@ -140,12 +143,19 @@ namespace Nabu.Mcp.AspNetCore.Server
             return result;
         }
 
-        private JsonObject ListTools()
+        private async Task<JsonObject> ListToolsAsync(HttpContext context, CancellationToken cancellationToken)
         {
             var tools = new JsonArray();
+            var hidden = 0;
 
             foreach (var tool in _registry.GetTools())
             {
+                if (!await IsVisibleAsync(tool, context, cancellationToken).ConfigureAwait(false))
+                {
+                    hidden++;
+                    continue;
+                }
+
                 var entry = new JsonObject
                 {
                     ["name"] = tool.Name,
@@ -174,7 +184,139 @@ namespace Nabu.Mcp.AspNetCore.Server
                 tools.Add(entry);
             }
 
+            if (hidden > 0)
+            {
+                _logger.LogDebug(
+                    "Nabu MCP hid {HiddenCount} tool(s) from this caller; {VisibleCount} advertised.",
+                    hidden,
+                    tools.Count);
+            }
+
             return new JsonObject { ["tools"] = tools };
+        }
+
+        /// <summary>
+        /// Whether a tool is advertised to the current caller. A failure to decide leaves the tool
+        /// visible: the pipeline authorizes the call anyway, so an unfilterable tool costs a 403, while a
+        /// wrongly hidden one costs the model a capability it actually has.
+        /// </summary>
+        private async Task<bool> IsVisibleAsync(McpToolDescriptor tool, HttpContext context, CancellationToken cancellationToken)
+        {
+            if (_options.ToolVisibility == McpToolVisibility.All)
+            {
+                return true;
+            }
+
+            try
+            {
+                return await _authorization.IsVisibleAsync(tool, context, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Nabu MCP could not decide whether to advertise the tool {Tool}; advertising it.", tool.Name);
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Whether this payload has to pass <see cref="NabuMcpOptions.RequireAuthorization"/> before it is
+        /// answered. Everything does unless <see cref="NabuMcpOptions.AnonymousAccess"/> opens a door, in
+        /// which case discovery - and, at the widest setting, calls to tools that need no authorization -
+        /// is answered for callers that hold no credentials yet.
+        /// </summary>
+        internal async Task<bool> RequiresEndpointAuthorizationAsync(
+            IReadOnlyList<JsonRpcRequest> requests,
+            HttpContext context,
+            CancellationToken cancellationToken)
+        {
+            var access = _options.AnonymousAccess;
+            if (access == McpAnonymousAccess.None)
+            {
+                return true;
+            }
+
+            foreach (var request in requests)
+            {
+                if (IsDiscoveryMethod(request.Method))
+                {
+                    continue;
+                }
+
+                if (access == McpAnonymousAccess.AnonymousTools &&
+                    string.Equals(request.Method, "tools/call", StringComparison.Ordinal) &&
+                    await IsAnonymousToolAsync(request, context, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether this call targets a tool the application itself would let an anonymous caller reach.
+        /// Anything unclear counts as protected: this decides who gets in, so it errs towards the
+        /// challenge rather than towards the door.
+        /// </summary>
+        private async Task<bool> IsAnonymousToolAsync(JsonRpcRequest request, HttpContext context, CancellationToken cancellationToken)
+        {
+            string? name;
+            try
+            {
+                name = request.Parameters?["name"]?.GetValue<string>();
+            }
+            catch (InvalidOperationException)
+            {
+                // A non-string name; let the authorized path report it as an invalid argument.
+                return false;
+            }
+
+            McpToolDescriptor? tool;
+            if (string.IsNullOrEmpty(name) || !_registry.TryGetTool(name!, out tool))
+            {
+                return false;
+            }
+
+            try
+            {
+                return !await _authorization.RequiresAuthorizationAsync(tool!, context, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Nabu MCP could not decide whether {Tool} is reachable anonymously; requiring authorization.",
+                    tool!.Name);
+                return false;
+            }
+        }
+
+        private static bool IsDiscoveryMethod(string method)
+        {
+            switch (method)
+            {
+                case "initialize":
+                case "ping":
+                case "tools/list":
+                case "resources/list":
+                case "resources/templates/list":
+                case "prompts/list":
+                case "logging/setLevel":
+                    return true;
+
+                default:
+                    return method.StartsWith("notifications/", StringComparison.Ordinal);
+            }
         }
 
         private async Task<JsonObject> CallToolAsync(JsonRpcRequest request, HttpContext context, CancellationToken cancellationToken)

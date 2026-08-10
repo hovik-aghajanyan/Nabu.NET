@@ -156,6 +156,13 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public McpToolAnnotations Annotations { get; }
 
         /// <summary>
+        /// What the underlying action demands of its caller. Used to decide whether the tool is worth
+        /// advertising to the caller of <c>tools/list</c>; it never replaces the authorization the
+        /// pipeline performs when the tool is invoked.
+        /// </summary>
+        public McpToolAuthorization Authorization { get; set; } = McpToolAuthorization.None;
+
+        /// <summary>
         /// Values fixed by the tool definition and written onto every request, on top of whatever the
         /// caller supplied. Populated from <see cref="McpToolAttribute.ConstantParameters"/>.
         /// </summary>

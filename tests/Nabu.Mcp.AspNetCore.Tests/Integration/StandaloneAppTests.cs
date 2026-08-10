@@ -43,28 +43,38 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
     public class StandaloneAppTests
     {
-        private static TestServer CreateServer(Action<NabuMcpOptions> configure)
+        /// <summary>
+        /// Hosts an in-memory application. WebHostBuilder is deprecated (ASPDEPR004), so the server is
+        /// built on the generic host; the returned <see cref="IHost"/> owns the TestServer and must be
+        /// disposed by the caller.
+        /// </summary>
+        private static IHost CreateServer(Action<NabuMcpOptions> configure)
         {
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services =>
-                {
-                    services
-                        .AddControllers()
-                        .AddApplicationPart(typeof(ProbeController).Assembly);
+            var host = new HostBuilder()
+                .ConfigureWebHost(webHost => webHost
+                    .UseTestServer()
+                    .ConfigureServices(services =>
+                    {
+                        services
+                            .AddControllers()
+                            .AddApplicationPart(typeof(ProbeController).Assembly)
+                            .OnlyControllers(typeof(ProbeController));
 
-                    services.AddNabuMcp(configure);
-                })
-                .Configure(app =>
-                {
-                    app.UseRouting();
-                    app.UseNabuMcp();
-                    app.UseEndpoints(endpoints => endpoints.MapControllers());
-                });
+                        services.AddNabuMcp(configure);
+                    })
+                    .Configure(app =>
+                    {
+                        app.UseRouting();
+                        app.UseNabuMcp();
+                        app.UseEndpoints(endpoints => endpoints.MapControllers());
+                    }))
+                .Build();
 
-            return new TestServer(builder);
+            host.Start();
+            return host;
         }
 
-        private static async Task<JsonObject> RpcAsync(TestServer server, string method, JsonObject? parameters = null)
+        private static async Task<JsonObject> RpcAsync(IHost server, string method, JsonObject? parameters = null)
         {
             var request = new JsonObject
             {
@@ -78,7 +88,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 request["params"] = parameters;
             }
 
-            using var client = server.CreateClient();
+            using var client = server.GetTestClient();
             using var response = await client.PostAsync(
                 "/mcp",
                 new StringContent(request.ToJsonString(), Encoding.UTF8, "application/json"));
@@ -86,7 +96,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             return JsonNode.Parse(await response.Content.ReadAsStringAsync())!.AsObject();
         }
 
-        private static async Task<string[]> ToolNamesAsync(TestServer server)
+        private static async Task<string[]> ToolNamesAsync(IHost server)
         {
             var envelope = await RpcAsync(server, "tools/list");
             return envelope["result"]!["tools"]!.AsArray().Select(t => t!["name"]!.GetValue<string>()).ToArray();
@@ -155,7 +165,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 options.Path = "/agent/mcp";
             });
 
-            using var client = server.CreateClient();
+            using var client = server.GetTestClient();
 
             using var atDefault = await client.PostAsync(
                 "/mcp",
@@ -257,11 +267,16 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         [Fact]
         public void UseNabuMcp_without_AddNabuMcp_fails_with_a_helpful_message()
         {
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services => services.AddControllers())
-                .Configure(app => app.UseNabuMcp());
+            using var host = new HostBuilder()
+                .ConfigureWebHost(webHost => webHost
+                    .UseTestServer()
+                    .ConfigureServices(services => services.AddControllers())
+                    .Configure(app => app.UseNabuMcp()))
+                .Build();
 
-            var exception = Assert.Throws<InvalidOperationException>(() => new TestServer(builder));
+            // The pipeline is built when the server starts, which is when UseNabuMcp() discovers that
+            // nothing was registered.
+            var exception = Assert.Throws<InvalidOperationException>(() => host.Start());
 
             Assert.Contains("AddNabuMcp", exception.Message);
         }
