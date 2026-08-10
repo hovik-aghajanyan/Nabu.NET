@@ -104,6 +104,132 @@ namespace Nabu.Mcp.AspNetCore.Server
             }
         }
 
+        /// <summary>
+        /// Handles one request under revision 2026-07-28 semantics: no handshake, no session, the
+        /// version validated per request and every result stamped with <c>resultType</c> and the
+        /// server's identity. Returns the response body together with the HTTP status the transport
+        /// prescribes for it.
+        /// </summary>
+        public async Task<ModernMcpResponse> HandleModernAsync(JsonRpcRequest request, HttpContext context, CancellationToken cancellationToken)
+        {
+            if (request == null)
+            {
+                throw new ArgumentNullException(nameof(request));
+            }
+
+            try
+            {
+                switch (request.Method)
+                {
+                    case "server/discover":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(request.Id, Discover()));
+
+                    case "tools/list":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(
+                            request.Id,
+                            Cacheable(Modern(await ListToolsAsync(context, cancellationToken).ConfigureAwait(false)))));
+
+                    case "tools/call":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(
+                            request.Id,
+                            Modern(await CallToolAsync(request, context, cancellationToken).ConfigureAwait(false))));
+
+                    case "resources/list":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(
+                            request.Id,
+                            Cacheable(Modern(new JsonObject { ["resources"] = new JsonArray() }))));
+
+                    case "resources/templates/list":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(
+                            request.Id,
+                            Cacheable(Modern(new JsonObject { ["resourceTemplates"] = new JsonArray() }))));
+
+                    case "prompts/list":
+                        return ModernMcpResponse.Ok(JsonRpc.Result(
+                            request.Id,
+                            Cacheable(Modern(new JsonObject { ["prompts"] = new JsonArray() }))));
+
+                    default:
+                        // The transport distinguishes an unknown method from a legacy server that
+                        // does not host the endpoint at all by pairing 404 with a JSON-RPC error.
+                        return new ModernMcpResponse(
+                            JsonRpc.Error(request.Id, McpConstants.MethodNotFound, "Method '" + request.Method + "' is not supported."),
+                            StatusCodes.Status404NotFound);
+                }
+            }
+            catch (McpArgumentException ex)
+            {
+                return ModernMcpResponse.Ok(JsonRpc.Error(request.Id, McpConstants.InvalidParams, ex.Message));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Nabu MCP failed to handle method {Method}.", request.Method);
+                return ModernMcpResponse.Ok(JsonRpc.Error(request.Id, McpConstants.InternalError, ex.Message));
+            }
+        }
+
+        /// <summary>
+        /// The <c>server/discover</c> result: supported modern versions, capabilities and identity.
+        /// Legacy revisions are deliberately not listed - a client picks a version from this list for
+        /// per-request use, and the legacy ones only work through <c>initialize</c>.
+        /// </summary>
+        private JsonObject Discover()
+        {
+            var versions = new JsonArray();
+            foreach (var version in McpConstants.ModernProtocolVersions)
+            {
+                versions.Add(version);
+            }
+
+            var result = new JsonObject
+            {
+                ["supportedVersions"] = versions,
+                ["capabilities"] = new JsonObject
+                {
+                    ["tools"] = new JsonObject { ["listChanged"] = false },
+                },
+            };
+
+            if (!string.IsNullOrEmpty(_options.Instructions))
+            {
+                result["instructions"] = _options.Instructions;
+            }
+
+            return Cacheable(Modern(result));
+        }
+
+        /// <summary>Stamps the fields revision 2026-07-28 requires on every result.</summary>
+        private JsonObject Modern(JsonObject result)
+        {
+            result["resultType"] = "complete";
+            result["_meta"] = new JsonObject
+            {
+                [McpConstants.ServerInfoMetaKey] = new JsonObject
+                {
+                    ["name"] = _options.ServerName ?? "nabu-mcp",
+                    ["version"] = _options.ServerVersion ?? "1.0.0",
+                },
+            };
+
+            return result;
+        }
+
+        /// <summary>
+        /// Stamps the <c>CacheableResult</c> fields. The scope is private because what a caller is
+        /// shown can depend on its credentials (<see cref="NabuMcpOptions.ToolVisibility"/>), so a
+        /// shared cache must never serve one caller's view to another.
+        /// </summary>
+        private JsonObject Cacheable(JsonObject result)
+        {
+            result["ttlMs"] = _options.CacheTtlMilliseconds;
+            result["cacheScope"] = "private";
+            return result;
+        }
+
         private JsonObject Initialize(JsonNode? parameters)
         {
             var requested = parameters?["protocolVersion"]?.GetValue<string>();
@@ -306,6 +432,7 @@ namespace Nabu.Mcp.AspNetCore.Server
             switch (method)
             {
                 case "initialize":
+                case "server/discover":
                 case "ping":
                 case "tools/list":
                 case "resources/list":
@@ -483,6 +610,28 @@ namespace Nabu.Mcp.AspNetCore.Server
         public McpInvalidRequestException(string message)
             : base(message)
         {
+        }
+    }
+
+    /// <summary>
+    /// A response produced under revision 2026-07-28 semantics, where some JSON-RPC errors are
+    /// paired with a specific HTTP status code by the transport.
+    /// </summary>
+    public readonly struct ModernMcpResponse
+    {
+        public ModernMcpResponse(JsonNode body, int statusCode)
+        {
+            Body = body;
+            StatusCode = statusCode;
+        }
+
+        public JsonNode Body { get; }
+
+        public int StatusCode { get; }
+
+        public static ModernMcpResponse Ok(JsonNode body)
+        {
+            return new ModernMcpResponse(body, StatusCodes.Status200OK);
         }
     }
 }

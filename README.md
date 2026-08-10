@@ -415,7 +415,8 @@ All options live on `NabuMcpOptions`:
 | Option | Default | Meaning |
 |---|---|---|
 | `Path` | `/mcp` | Endpoint path. |
-| `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize`. |
+| `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize` / `server/discover`. |
+| `CacheTtlMilliseconds` | `60000` | `ttlMs` freshness hint on cacheable `2026-07-28` results. |
 | `ExposeAllActions` | `false` | Publish every action, not just annotated ones. `[McpIgnore]` still wins. |
 | `RequireAuthorization`, `AuthorizationPolicy`, `AuthenticationSchemes` | off | Protects the MCP endpoint. |
 | `ToolVisibility` | `All` | Advertise every tool, or only the ones the caller is authenticated / authorized for. |
@@ -435,21 +436,32 @@ All options live on `NabuMcpOptions`:
 
 ## Protocol support
 
-Streamable HTTP transport, JSON-RPC 2.0, protocol revisions `2025-06-18`, `2025-03-26` and
-`2024-11-05` (negotiated at `initialize`).
+Streamable HTTP transport, JSON-RPC 2.0. The server is dual-era: it speaks the stateless
+revision `2026-07-28` (version and capabilities declared in `_meta` on every request, no
+handshake, no sessions) and the legacy revisions `2025-06-18`, `2025-03-26` and `2024-11-05`
+(negotiated at `initialize`). A request that declares a protocol version in `_meta` — or calls
+`server/discover` — is served under `2026-07-28` semantics; everything else stays on the
+legacy path, so existing clients are unaffected.
+
+On the `2026-07-28` path the mirrored request headers (`MCP-Protocol-Version`, `Mcp-Method`,
+`Mcp-Name`) are validated against the body (`-32020` on mismatch), an unsupported version is
+answered with `-32022` and the supported list, results carry `resultType`, the server's
+identity in `_meta`, and `ttlMs`/`cacheScope` on cacheable results, and no session id is ever
+minted.
 
 | Method | Behaviour |
 |---|---|
-| `initialize` | Negotiates the version, advertises the `tools` capability, returns a session id. |
+| `server/discover` | (`2026-07-28`) Supported versions, capabilities, identity and instructions. |
+| `initialize` | (legacy) Negotiates the version, advertises the `tools` capability, returns a session id. |
 | `tools/list` | Every discovered tool with its schema and annotations. |
 | `tools/call` | Replays the action; returns text content, `structuredContent`, and `isError`. |
-| `ping` | Answered with an empty result. |
+| `ping` | (legacy) Answered with an empty result. |
 | `notifications/*` | Accepted with `202` and no body. |
 | `resources/list`, `resources/templates/list`, `prompts/list` | Answered as empty for client compatibility. |
 
 `POST` returns `application/json`, or a single server-sent event when the client accepts only
-`text/event-stream`. Batched arrays are supported. `DELETE` ends a session (the server is stateless, so
-this is a no-op). `GET` returns `405`.
+`text/event-stream`. Batched arrays are supported on the legacy path. `DELETE` ends a legacy
+session (the server is stateless, so this is a no-op). `GET` returns `405`.
 
 Failures are reported at the right layer: a bad tool name or a missing required argument is a JSON-RPC
 error (`-32602`), while an HTTP error from the action - 400 from validation, 403 from a policy, 404
