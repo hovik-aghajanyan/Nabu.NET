@@ -482,7 +482,7 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ```bash
 dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 191 tests
+dotnet test           # 199 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
