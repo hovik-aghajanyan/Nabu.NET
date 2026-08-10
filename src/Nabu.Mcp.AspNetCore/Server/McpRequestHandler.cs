@@ -269,7 +269,7 @@ namespace Nabu.Mcp.AspNetCore.Server
             return result;
         }
 
-        private async Task<JsonObject> ListToolsAsync(HttpContext context, CancellationToken cancellationToken)
+        internal async Task<JsonObject> ListToolsAsync(HttpContext context, CancellationToken cancellationToken)
         {
             var tools = new JsonArray();
             var hidden = 0;

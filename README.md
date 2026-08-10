@@ -90,8 +90,10 @@ app.MapControllers();
 app.Run();
 ```
 
-`UseNabuMcp()` serves the MCP endpoint at `/mcp` by default. Where you place it only affects the MCP
-endpoint itself - tool calls always traverse the whole pipeline from the top, regardless of position.
+`UseNabuMcp()` serves the MCP endpoint at `/mcp` by default. The route can be changed either
+through `options.Path` or directly at the mount - `app.UseNabuMcp("/agent/mcp")` - with the
+argument winning when both are set. Where you place it only affects the MCP endpoint itself -
+tool calls always traverse the whole pipeline from the top, regardless of position.
 
 ### 3. Mark the actions you want to publish
 
@@ -467,6 +469,36 @@ Failures are reported at the right layer: a bad tool name or a missing required 
 error (`-32602`), while an HTTP error from the action - 400 from validation, 403 from a policy, 404
 from the action - is a successful JSON-RPC response carrying `isError: true`, which is what lets a
 model read and react to it.
+
+### Using the official MCP SDK as the protocol layer
+
+Nabu's value is the ASP.NET Core bridge - controller discovery, schema generation,
+authorization-aware visibility and pipeline replay - not the JSON-RPC plumbing. The protocol
+layer is therefore replaceable. The `Nabu.Mcp.ModelContextProtocol` package serves Nabu's tools
+through the official [ModelContextProtocol C# SDK](https://github.com/modelcontextprotocol/csharp-sdk)
+instead of the built-in layer:
+
+```csharp
+services.AddNabuMcp(options => { ... })
+        .UseOfficialMcpProtocol();
+
+app.UseNabuMcp(); // now mounts the official SDK's Streamable HTTP endpoint at the same path
+```
+
+The SDK owns the wire protocol - transport, protocol revisions, sessions - and Nabu answers
+`tools/list` and `tools/call` behind it, with the same visibility rules and pipeline replay as
+the built-in layer. The transport defaults to the SDK's stateless mode, matching Nabu's design;
+pass a configuration delegate to change that or any other transport option:
+
+```csharp
+services.AddNabuMcp().UseOfficialMcpProtocol(transport => transport.Stateless = false);
+```
+
+Choose the built-in layer for netstandard2.0/ASP.NET Core 2.x compatibility and zero extra
+dependencies; choose the official layer (net8.0+) to track the protocol at the SDK's pace and
+pick up its transport features. `RequireAuthorization` is honoured on the mapped endpoint; the
+partial `AnonymousAccess` modes leave the endpoint anonymous and rely on the replayed pipeline
+to authorize each call.
 
 ## Target frameworks
 

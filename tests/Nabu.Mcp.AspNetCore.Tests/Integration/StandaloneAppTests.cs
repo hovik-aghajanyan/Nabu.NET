@@ -179,6 +179,48 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         }
 
         [Fact]
+        public async Task The_path_argument_of_UseNabuMcp_wins_over_the_configured_path()
+        {
+            using var host = new HostBuilder()
+                .ConfigureWebHost(webHost => webHost
+                    .UseTestServer()
+                    .ConfigureServices(services =>
+                    {
+                        services
+                            .AddControllers()
+                            .AddApplicationPart(typeof(ProbeController).Assembly)
+                            .OnlyControllers(typeof(ProbeController));
+
+                        services.AddNabuMcp(options =>
+                        {
+                            options.ExposeAllActions = true;
+                            options.Path = "/configured";
+                        });
+                    })
+                    .Configure(app =>
+                    {
+                        app.UseRouting();
+                        app.UseNabuMcp("mounted");
+                        app.UseEndpoints(endpoints => endpoints.MapControllers());
+                    }))
+                .Build();
+
+            host.Start();
+            using var server = host;
+            using var client = server.GetTestClient();
+
+            using var atConfigured = await client.PostAsync(
+                "/configured",
+                new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}", Encoding.UTF8, "application/json"));
+            Assert.Equal(HttpStatusCode.NotFound, atConfigured.StatusCode);
+
+            using var atMounted = await client.PostAsync(
+                "/mounted",
+                new StringContent("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}", Encoding.UTF8, "application/json"));
+            Assert.Equal(HttpStatusCode.OK, atMounted.StatusCode);
+        }
+
+        [Fact]
         public async Task Header_parameters_are_hidden_by_default()
         {
             using var server = CreateServer(options => options.ExposeAllActions = true);

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net8.0+ only: the official ModelContextProtocol.AspNetCore SDK does not target
+      netstandard2.0. Apps on older frameworks keep using Nabu's built-in protocol layer,
+      which is exactly why the built-in layer exists.
+    -->
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <RootNamespace>Nabu.Mcp.ModelContextProtocol</RootNamespace>
+    <AssemblyName>Nabu.Mcp.ModelContextProtocol</AssemblyName>
+    <PackageId>Nabu.Mcp.ModelContextProtocol</PackageId>
+    <Title>Nabu.NET - official MCP C# SDK protocol adapter</Title>
+    <Description>
+      Serves Nabu's controller-derived MCP tools through the official ModelContextProtocol C# SDK.
+      Add UseOfficialMcpProtocol() after AddNabuMcp() and the wire protocol - transport, sessions,
+      protocol versions - is handled by the official SDK, while Nabu keeps doing controller
+      discovery, schema generation, authorization-aware visibility and pipeline replay.
+    </Description>
+    <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.1.0" />
+    <ProjectReference Include="..\Nabu.Mcp.AspNetCore\Nabu.Mcp.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>
