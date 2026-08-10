@@ -500,6 +500,9 @@ pick up its transport features. `RequireAuthorization` is honoured on the mapped
 partial `AnonymousAccess` modes leave the endpoint anonymous and rely on the replayed pipeline
 to authorize each call.
 
+`samples/Nabu.Sample.OfficialSdk` is a complete runnable example: a small book-catalog API
+published through the official SDK on a custom route (`app.UseNabuMcp("/books/mcp")`).
+
 ## Target frameworks
 
 The library multi-targets `netstandard2.0`, `net6.0` and `net8.0`:
@@ -515,8 +518,10 @@ Newtonsoft.Json.
 ## Repository layout
 
 ```
-src/Nabu.Mcp.AspNetCore/     the framework
-samples/Nabu.Sample.TodoApi/ a JWT-secured todo API wired up with Nabu
+src/Nabu.Mcp.AspNetCore/            the framework
+src/Nabu.Mcp.ModelContextProtocol/  optional adapter serving Nabu's tools through the official MCP C# SDK
+samples/Nabu.Sample.TodoApi/        a JWT-secured todo API wired up with Nabu
+samples/Nabu.Sample.OfficialSdk/    a book catalog served through UseOfficialMcpProtocol()
 tests/Nabu.Mcp.AspNetCore.Tests/  unit and integration tests
 .github/workflows/           CI on every push and PR, NuGet publishing on every v* tag
 ```
