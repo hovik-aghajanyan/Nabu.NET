@@ -40,7 +40,14 @@ jobs:
         run: dotnet test Nabu.NET.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
 
       - name: Pack
-        run: dotnet pack src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj --configuration Release --no-build --output artifacts
+        run: |
+          set -euo pipefail
+          for project in \
+            src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj \
+            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj
+          do
+            dotnet pack "${project}" --configuration Release --no-build --output artifacts
+          done
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nabu.Mcp.AspNetCore.Tests",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nabu.Mcp.ModelContextProtocol", "src\Nabu.Mcp.ModelContextProtocol\Nabu.Mcp.ModelContextProtocol.csproj", "{6FB05845-D5C8-4796-839C-12DECC570512}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nabu.Sample.OfficialSdk", "samples\Nabu.Sample.OfficialSdk\Nabu.Sample.OfficialSdk.csproj", "{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -75,6 +77,18 @@ Global
 		{6FB05845-D5C8-4796-839C-12DECC570512}.Release|x64.Build.0 = Release|Any CPU
 		{6FB05845-D5C8-4796-839C-12DECC570512}.Release|x86.ActiveCfg = Release|Any CPU
 		{6FB05845-D5C8-4796-839C-12DECC570512}.Release|x86.Build.0 = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|x64.Build.0 = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Debug|x86.Build.0 = Debug|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|x64.ActiveCfg = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|x64.Build.0 = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|x86.ActiveCfg = Release|Any CPU
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -84,5 +98,6 @@ Global
 		{3B994537-17FB-4D0A-B150-C9C23FE07D4B} = {B05E5686-1D65-4C6F-9D3D-46085308BD61}
 		{D6F87D30-AD26-4AA5-A06C-05D0ACE14401} = {953F87EF-0B57-4E51-8FE2-5751C5EA85DA}
 		{6FB05845-D5C8-4796-839C-12DECC570512} = {A112FA9A-362C-4BDA-8ECE-CE947D15A77E}
+		{DC0A2C9B-B7D5-426E-AAA7-46320F9DF846} = {B05E5686-1D65-4C6F-9D3D-46085308BD61}
 	EndGlobalSection
 EndGlobal

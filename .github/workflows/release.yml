@@ -90,14 +90,22 @@ jobs:
           --no-build
           -p:Version=${{ steps.version.outputs.version }}
 
+      # Both packages are packed at the same version, so the adapter's project reference to
+      # Nabu.Mcp.AspNetCore becomes a NuGet dependency on the version released alongside it.
       - name: Pack
-        run: >-
-          dotnet pack src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj
-          --configuration Release
-          --no-build
-          --output artifacts
-          -p:Version=${{ steps.version.outputs.version }}
-          -p:ContinuousIntegrationBuild=true
+        run: |
+          set -euo pipefail
+          for project in \
+            src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj \
+            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj
+          do
+            dotnet pack "${project}" \
+              --configuration Release \
+              --no-build \
+              --output artifacts \
+              -p:Version=${{ steps.version.outputs.version }} \
+              -p:ContinuousIntegrationBuild=true
+          done
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

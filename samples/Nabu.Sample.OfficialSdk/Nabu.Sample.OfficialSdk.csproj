@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Nabu.Sample.OfficialSdk</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Nabu reads these XML comments to describe tools and parameters to the model. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Nabu.Mcp.AspNetCore\Nabu.Mcp.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Nabu.Mcp.ModelContextProtocol\Nabu.Mcp.ModelContextProtocol.csproj" />
+  </ItemGroup>
+
+</Project>
