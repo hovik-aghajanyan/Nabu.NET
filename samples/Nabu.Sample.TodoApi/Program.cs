@@ -53,6 +53,13 @@ builder.Services.AddNabuMcp(options =>
     // The MCP endpoint itself requires an authenticated caller. Individual actions are still
     // authorized independently by their own [Authorize] attributes.
     options.RequireAuthorization = true;
+
+    // Uncomment to let a client be added before it holds a token: it would then connect anonymously,
+    // be advertised only the weather tools - the ones carrying [AllowAnonymous] - and be able to call
+    // them, while everything else answers 401 until it authenticates and lists the tools again.
+    //
+    // options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+    // options.ToolVisibility = McpToolVisibility.Authorized;
 });
 
 var app = builder.Build();

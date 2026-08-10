@@ -148,10 +148,12 @@ curl -X POST http://localhost:5000/mcp \
 | `[McpIgnore]` | controller, action, parameter, property | Excludes it. Always wins. |
 | `[McpParameter]` | parameter, property | Overrides the name, description, requiredness or example of one input. |
 
-`[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, and the four MCP behaviour hints
-`ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to the HTTP semantics of the
-verb - GET is read-only and idempotent, DELETE and PUT are destructive - and any hint you set
-explicitly overrides that default.
+`[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, `RequiresAuthorization`, and the
+four MCP behaviour hints `ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to
+the HTTP semantics of the verb - GET is read-only and idempotent, DELETE and PUT are destructive - and
+any hint you set explicitly overrides that default. `RequiresAuthorization` overrides what Nabu infers
+about the action's authorization when it tailors the tool list to the caller - see
+[Advertising tools per caller](#advertising-tools-per-caller).
 
 ```csharp
 [HttpPost("{id:guid}/publish")]
@@ -301,6 +303,73 @@ Identity reaches the action two ways, which reinforce each other:
 Hop-by-hop and content headers (`Content-Length`, `Transfer-Encoding`, `Accept-Encoding`, `Host`, ...)
 are never forwarded; they are rebuilt for the synthetic request.
 
+### Advertising tools per caller
+
+By default every discovered tool is advertised to everyone, and a caller that invokes one it is not
+allowed to use gets the action's own 401 or 403 back as a tool error. That is safe, but it hands the
+model a menu it cannot order from - and a client added before anyone has signed in sees the whole
+catalogue.
+
+`ToolVisibility` tailors `tools/list` to whoever is asking:
+
+```csharp
+options.ToolVisibility = McpToolVisibility.Authorized;
+```
+
+| Value | `tools/list` contains |
+|---|---|
+| `All` (default) | Every discovered tool, whoever is asking. |
+| `Authenticated` | Tools whose actions need authorization, only once the caller is authenticated. |
+| `Authorized` | Tools whose actions need authorization, only once the caller satisfies their policies. |
+
+Nabu reads the requirement during discovery, from the `[Authorize]` and `[AllowAnonymous]` metadata of
+the action, its controller and the filter collection - `[AllowAnonymous]` wins, exactly as it does in
+MVC - and evaluates it against the caller with the application's own `IAuthorizationPolicyProvider` and
+`IAuthorizationService`. An unauthenticated caller is therefore shown only the tools that need no
+authorization; the rest appear when it lists the tools again with credentials.
+
+This decides what is *advertised*, never what is allowed. A hidden tool that gets called anyway is
+still replayed through the pipeline and still refused by the action, so filtering can never be the only
+thing standing between a caller and an endpoint. When the requirement cannot be worked out - a custom
+filter Nabu cannot see, a missing authorization service - the tool stays visible, because a spurious 403
+is a better failure than a capability that silently disappeared. Two escape hatches exist for the cases
+Nabu reads wrongly:
+
+```csharp
+[McpTool(RequiresAuthorization = true)]     // treat as protected regardless of what the metadata says
+```
+
+```csharp
+// or take the decision over entirely
+services.AddSingleton<IMcpToolAuthorizationEvaluator, MyEvaluator>();
+```
+
+### Adding a client before it has credentials
+
+`RequireAuthorization = true` makes `/mcp` itself reject anonymous callers, which is what triggers the
+OAuth flow in MCP clients that support one - but it also means a client cannot so much as initialize
+until credentials exist. `AnonymousAccess` opens a narrow door in that gate:
+
+| Value | An unauthorized caller may |
+|---|---|
+| `None` (default) | Nothing. Every request is challenged. |
+| `Discovery` | `initialize`, `ping` and the listing methods. `tools/call` is still challenged. |
+| `AnonymousTools` | The above, plus `tools/call` for tools whose actions need no authorization. |
+
+```csharp
+options.RequireAuthorization = true;
+options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+options.ToolVisibility = McpToolVisibility.Authorized;
+```
+
+Now a client added without credentials connects, lists the public tools and can use them; everything
+else is a 401, which is exactly the signal a client needs to start authenticating; and once it does, the
+next `tools/list` returns the full set it is entitled to. Pair the two options as above - `AnonymousAccess`
+on its own would advertise tools the anonymous caller cannot call.
+
+Because the server is stateless it cannot push `notifications/tools/list_changed`, so a client that
+caches the tool list should re-list after authenticating.
+
 > Because the MCP endpoint hands one authenticated caller the ability to invoke every published action,
 > publish deliberately. `[McpTool]` is opt-in for exactly this reason, and `[McpIgnore]` lets you keep
 > an action reachable over HTTP while hiding it from MCP.
@@ -315,6 +384,8 @@ All options live on `NabuMcpOptions`:
 | `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize`. |
 | `ExposeAllActions` | `false` | Publish every action, not just annotated ones. `[McpIgnore]` still wins. |
 | `RequireAuthorization`, `AuthorizationPolicy`, `AuthenticationSchemes` | off | Protects the MCP endpoint. |
+| `ToolVisibility` | `All` | Advertise every tool, or only the ones the caller is authenticated / authorized for. |
+| `AnonymousAccess` | `None` | How much of a protected endpoint an unauthorized caller may reach. |
 | `ToolNameFactory` | `controller_action` snake_case | Builds tool names. |
 | `ToolFilter` | none | Last-chance predicate to drop discovered tools. |
 | `FlattenBodyParameter` | `true` | Lift `[FromBody]` model properties to the top level. |

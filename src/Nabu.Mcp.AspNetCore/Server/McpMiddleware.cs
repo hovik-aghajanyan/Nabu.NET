@@ -42,12 +42,20 @@ namespace Nabu.Mcp.AspNetCore.Server
                 return;
             }
 
-            if (_options.RequireAuthorization && !await AuthorizeAsync(context).ConfigureAwait(false))
+            var method = context.Request.Method.ToUpperInvariant();
+
+            // A POST is gated after it has been parsed when anonymous access is open, because which
+            // JSON-RPC methods it carries is what decides whether credentials are needed at all.
+            var gateHere = _options.RequireAuthorization &&
+                           (_options.AnonymousAccess == McpAnonymousAccess.None ||
+                            !string.Equals(method, "POST", StringComparison.Ordinal));
+
+            if (gateHere && !await AuthorizeAsync(context).ConfigureAwait(false))
             {
                 return;
             }
 
-            switch (context.Request.Method.ToUpperInvariant())
+            switch (method)
             {
                 case "POST":
                     await HandlePostAsync(context, handler).ConfigureAwait(false);
@@ -182,6 +190,14 @@ namespace Nabu.Mcp.AspNetCore.Server
             {
                 context.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await WriteJsonAsync(context, JsonRpc.Error(null, McpConstants.InvalidRequest, ex.Message)).ConfigureAwait(false);
+                return;
+            }
+
+            if (_options.RequireAuthorization &&
+                _options.AnonymousAccess != McpAnonymousAccess.None &&
+                handler.RequiresEndpointAuthorization(requests) &&
+                !await AuthorizeAsync(context).ConfigureAwait(false))
+            {
                 return;
             }
 

@@ -4,6 +4,57 @@ using Nabu.Mcp.AspNetCore.Discovery;
 
 namespace Nabu.Mcp.AspNetCore
 {
+    /// <summary>Which of the discovered tools <c>tools/list</c> advertises to a given caller.</summary>
+    public enum McpToolVisibility
+    {
+        /// <summary>
+        /// Every discovered tool is advertised, whoever is asking. Calls are still authorized by the
+        /// application pipeline, so a caller can see a tool it is not allowed to invoke. This is the
+        /// default.
+        /// </summary>
+        All = 0,
+
+        /// <summary>
+        /// Tools whose actions require authorization are advertised only to callers that are
+        /// authenticated. Which policies those callers satisfy is not examined - use
+        /// <see cref="Authorized"/> for that.
+        /// </summary>
+        Authenticated = 1,
+
+        /// <summary>
+        /// Tools whose actions require authorization are advertised only to callers that satisfy the
+        /// action's authorization policies, evaluated with the application's own policy provider and
+        /// authorization service.
+        /// </summary>
+        Authorized = 2,
+    }
+
+    /// <summary>
+    /// How much of the MCP endpoint an unauthorized caller may reach when
+    /// <see cref="NabuMcpOptions.RequireAuthorization"/> is on.
+    /// </summary>
+    public enum McpAnonymousAccess
+    {
+        /// <summary>
+        /// Nothing: every request to the endpoint is subject to <see cref="NabuMcpOptions.RequireAuthorization"/>.
+        /// This is the default.
+        /// </summary>
+        None = 0,
+
+        /// <summary>
+        /// <c>initialize</c>, <c>ping</c> and the listing methods are answered without authorization, so a
+        /// client can be added before credentials exist. <c>tools/call</c> still requires them.
+        /// </summary>
+        Discovery = 1,
+
+        /// <summary>
+        /// As <see cref="Discovery"/>, and additionally <c>tools/call</c> for tools whose actions do not
+        /// require authorization. Everything else still challenges, and the action's own authorization
+        /// runs as usual.
+        /// </summary>
+        AnonymousTools = 2,
+    }
+
     /// <summary>Configuration for the MCP server exposed on top of an existing Web API.</summary>
     public class NabuMcpOptions
     {
@@ -42,6 +93,31 @@ namespace Nabu.Mcp.AspNetCore
         /// Authentication schemes to challenge with on the MCP endpoint. Empty means the default scheme.
         /// </summary>
         public IList<string> AuthenticationSchemes { get; } = new List<string>();
+
+        /// <summary>
+        /// Tailors the advertised tool list to the caller. With
+        /// <see cref="McpToolVisibility.Authenticated"/> or <see cref="McpToolVisibility.Authorized"/> an
+        /// unauthorized caller is shown only the tools whose actions it could actually invoke, and the
+        /// rest appear once it has authenticated and listed the tools again.
+        /// </summary>
+        /// <remarks>
+        /// This decides what is <em>advertised</em>, never what is allowed: every tool call still travels
+        /// through the application pipeline and is authorized there. A tool hidden from a caller that
+        /// calls it anyway is refused by the action itself, exactly as an HTTP request would be.
+        /// </remarks>
+        public McpToolVisibility ToolVisibility { get; set; } = McpToolVisibility.All;
+
+        /// <summary>
+        /// Lets an unauthorized caller reach part of the MCP endpoint even though
+        /// <see cref="RequireAuthorization"/> is on, so a client can be added, initialized and given a
+        /// tool list before it holds any credentials. Ignored when <see cref="RequireAuthorization"/> is
+        /// off, because the endpoint is then anonymous already.
+        /// </summary>
+        /// <remarks>
+        /// Pair this with <see cref="ToolVisibility"/>, otherwise the anonymous caller is advertised
+        /// tools it cannot call.
+        /// </remarks>
+        public McpAnonymousAccess AnonymousAccess { get; set; } = McpAnonymousAccess.None;
 
         /// <summary>
         /// Request headers copied from the MCP request onto the synthetic action request. Credentials

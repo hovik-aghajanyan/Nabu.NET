@@ -37,6 +37,7 @@ namespace Nabu.Mcp.AspNetCore
         private bool? _destructive;
         private bool? _idempotent;
         private bool? _openWorld;
+        private bool? _requiresAuthorization;
 
         public McpToolAttribute()
         {
@@ -143,6 +144,23 @@ namespace Nabu.Mcp.AspNetCore
             set { _openWorld = value; }
         }
 
+        /// <summary>
+        /// Overrides whether the tool counts as protected when
+        /// <see cref="NabuMcpOptions.ToolVisibility"/> tailors the advertised tool list to the caller.
+        /// By default Nabu reads that from the <c>[Authorize]</c> and <c>[AllowAnonymous]</c> metadata of
+        /// the action and its controller; set this when the action is protected by something Nabu cannot
+        /// see, such as a custom filter or a gateway, or to keep a protected action advertised anyway.
+        /// </summary>
+        /// <remarks>
+        /// This only affects what is advertised. Whether a call actually succeeds is decided by the
+        /// application pipeline, which authorizes every tool call regardless of this value.
+        /// </remarks>
+        public bool RequiresAuthorization
+        {
+            get { return _requiresAuthorization ?? false; }
+            set { _requiresAuthorization = value; }
+        }
+
         internal bool? ReadOnlyOverride { get { return _readOnly; } }
 
         internal bool? DestructiveOverride { get { return _destructive; } }
@@ -150,5 +168,7 @@ namespace Nabu.Mcp.AspNetCore
         internal bool? IdempotentOverride { get { return _idempotent; } }
 
         internal bool? OpenWorldOverride { get { return _openWorld; } }
+
+        internal bool? RequiresAuthorizationOverride { get { return _requiresAuthorization; } }
     }
 }

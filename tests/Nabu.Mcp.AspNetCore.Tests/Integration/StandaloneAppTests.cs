@@ -50,7 +50,8 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 {
                     services
                         .AddControllers()
-                        .AddApplicationPart(typeof(ProbeController).Assembly);
+                        .AddApplicationPart(typeof(ProbeController).Assembly)
+                        .OnlyControllers(typeof(ProbeController));
 
                     services.AddNabuMcp(configure);
                 })
