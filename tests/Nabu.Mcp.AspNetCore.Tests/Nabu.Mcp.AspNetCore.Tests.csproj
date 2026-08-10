@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nabu.Mcp.AspNetCore\Nabu.Mcp.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Nabu.Mcp.ModelContextProtocol\Nabu.Mcp.ModelContextProtocol.csproj" />
     <ProjectReference Include="..\..\samples\Nabu.Sample.TodoApi\Nabu.Sample.TodoApi.csproj" />
   </ItemGroup>
 

@@ -67,6 +67,14 @@ namespace Nabu.Mcp.AspNetCore
         /// <summary>Free-form guidance handed to the model alongside the tool list.</summary>
         public string? Instructions { get; set; }
 
+        /// <summary>
+        /// Freshness hint, in milliseconds, stamped as <c>ttlMs</c> on the cacheable results
+        /// (<c>server/discover</c> and the listing methods) served to 2026-07-28 clients. The tool
+        /// registry is fixed at startup, but what a caller is shown can depend on its credentials,
+        /// so keep this short enough that a client re-lists soon after authenticating.
+        /// </summary>
+        public int CacheTtlMilliseconds { get; set; } = 60_000;
+
         /// <summary>Path the MCP endpoint is served from. Defaults to <c>/mcp</c>.</summary>
         public string Path { get; set; } = "/mcp";
 

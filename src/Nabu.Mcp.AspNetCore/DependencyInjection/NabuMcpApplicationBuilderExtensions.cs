@@ -29,10 +29,17 @@ namespace Nabu.Mcp.AspNetCore
                     "UseNabuMcp() requires AddNabuMcp() to have been called on the service collection.");
             }
 
+            var options = app.ApplicationServices.GetRequiredService<IOptions<NabuMcpOptions>>().Value;
             if (!string.IsNullOrEmpty(path))
             {
-                var options = app.ApplicationServices.GetRequiredService<IOptions<NabuMcpOptions>>().Value;
                 options.Path = path!.StartsWith("/", StringComparison.Ordinal) ? path : "/" + path;
+            }
+
+            var mount = app.ApplicationServices.GetService<INabuMcpProtocolMount>();
+            if (mount != null)
+            {
+                mount.Mount(app, options.Path);
+                return app;
             }
 
             return app.UseMiddleware<McpMiddleware>();

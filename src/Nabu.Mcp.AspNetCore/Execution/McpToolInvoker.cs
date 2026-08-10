@@ -39,6 +39,8 @@ namespace Nabu.Mcp.AspNetCore.Execution
             "Upgrade",
             McpConstants.SessionIdHeader,
             McpConstants.ProtocolVersionHeader,
+            McpConstants.MethodHeader,
+            McpConstants.NameHeader,
         };
 
         private readonly McpPipelineProvider _pipelineProvider;

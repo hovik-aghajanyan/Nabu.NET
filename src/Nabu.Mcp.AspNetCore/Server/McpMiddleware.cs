@@ -246,6 +246,15 @@ namespace Nabu.Mcp.AspNetCore.Server
                 }
             }
 
+            // A single request that declares its protocol version in _meta (or calls the
+            // handshake-free server/discover) is served under revision 2026-07-28 semantics.
+            // Batches stay on the legacy path: modern transports post one message at a time.
+            if (!isBatch && requests.Count == 1 && ModernProtocol.IsModern(requests[0]))
+            {
+                await HandleModernPostAsync(context, handler, requests[0]).ConfigureAwait(false);
+                return;
+            }
+
             var responses = new JsonArray();
             var hasInitialize = false;
 
@@ -293,6 +302,66 @@ namespace Nabu.Mcp.AspNetCore.Server
             else
             {
                 await WriteJsonAsync(context, result).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Serves one revision 2026-07-28 request: validates the mirrored headers and the declared
+        /// protocol version, then dispatches. No session id is ever minted on this path.
+        /// </summary>
+        private async Task HandleModernPostAsync(HttpContext context, McpRequestHandler handler, JsonRpcRequest request)
+        {
+            if (request.IsNotification)
+            {
+                // Header requirements for notification POSTs are not defined by this revision;
+                // the transport just wants them acknowledged without a body.
+                context.Response.StatusCode = StatusCodes.Status202Accepted;
+                return;
+            }
+
+            var declaredVersion = ModernProtocol.DeclaredVersion(request);
+
+            var headerError = ModernProtocol.ValidateHeaders(context, request, declaredVersion);
+            if (headerError != null)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(context, JsonRpc.Error(request.Id, McpConstants.HeaderMismatch, headerError))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            if (!ModernProtocol.IsSupportedVersion(declaredVersion!))
+            {
+                var supported = new JsonArray();
+                foreach (var version in McpConstants.ModernProtocolVersions)
+                {
+                    supported.Add(version);
+                }
+
+                var data = new JsonObject
+                {
+                    ["supported"] = supported,
+                    ["requested"] = declaredVersion,
+                };
+
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await WriteJsonAsync(
+                    context,
+                    JsonRpc.Error(request.Id, McpConstants.UnsupportedProtocolVersion, "Unsupported protocol version", data))
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var response = await handler.HandleModernAsync(request, context, context.RequestAborted).ConfigureAwait(false);
+            context.Response.StatusCode = response.StatusCode;
+
+            if (PrefersEventStream(context))
+            {
+                await WriteEventStreamAsync(context, response.Body).ConfigureAwait(false);
+            }
+            else
+            {
+                await WriteJsonAsync(context, response.Body).ConfigureAwait(false);
             }
         }
 
