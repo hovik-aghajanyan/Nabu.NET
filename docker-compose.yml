@@ -1,0 +1,77 @@
+# Runs the sample TodoApi and MCP Inspector together to showcase Nabu's
+# per-identity tool exposure:
+#
+#   docker compose up --build
+#   open http://localhost:6274?MCP_INSPECTOR_API_TOKEN=nabu-local-dev
+#
+# The Inspector's server list has three connections to the SAME endpoint:
+#   nabu-anonymous   -> weather tools + todos_get_priorities only
+#   nabu-alice-user  -> + alice's todo tools
+#   nabu-root-admin  -> + todos_delete (admin-only)
+#
+# The same comparison, scriptable:
+#   docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+#     --server nabu-anonymous --method tools/list
+#   docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+#     --server nabu-root-admin --method tools/list
+services:
+  todo-api:
+    build:
+      context: .
+      dockerfile: samples/Nabu.Sample.TodoApi/Dockerfile
+    # 5080 to stay clear of macOS AirPlay, which squats on port 5000.
+    ports:
+      - "5080:8080"
+    environment:
+      # The demo tokens are minted once at startup; keep them alive for a day.
+      Jwt__LifetimeMinutes: "1440"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: logs in as alice and root, writes the Inspector catalog with
+  # anonymous / alice / root connections into the shared volume.
+  inspector-config:
+    image: curlimages/curl:latest
+    # The curl image defaults to a non-root user that cannot write to the
+    # root-owned named volume.
+    user: "0"
+    volumes:
+      - inspector-shared:/shared
+      - ./docker/generate-inspector-config.sh:/generate-inspector-config.sh:ro
+    entrypoint: ["/bin/sh", "/generate-inspector-config.sh"]
+    depends_on:
+      todo-api:
+        condition: service_healthy
+
+  inspector:
+    build:
+      context: docker
+      dockerfile: inspector.Dockerfile
+    # --config (not --catalog): the read-only session config is served as-is,
+    # while a writable catalog would try to move the Authorization headers into
+    # the OS keyring, which does not exist inside the container.
+    command: ["--config", "/shared/mcp-servers.json"]
+    # The Inspector stores per-server secrets via the kernel keyring, and
+    # Docker's default seccomp profile blocks the keyctl syscalls (EPERM).
+    # Fine for a local demo; do not ship this to a shared host.
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      # Fixed UI token so the URL in the comment above always works.
+      MCP_INSPECTOR_API_TOKEN: nabu-local-dev
+      MCP_SANDBOX_PORT: "6275"
+      ALLOWED_ORIGINS: "http://localhost:6274"
+    ports:
+      - "6274:6274"
+      - "6275:6275"
+    volumes:
+      - inspector-shared:/shared
+    depends_on:
+      inspector-config:
+        condition: service_completed_successfully
+
+volumes:
+  inspector-shared:

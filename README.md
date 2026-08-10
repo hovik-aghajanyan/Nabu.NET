@@ -33,6 +33,7 @@ public ActionResult<TodoItem> GetById(Guid id) => ...
 - [Protocol support](#protocol-support)
 - [Target frameworks](#target-frameworks)
 - [Repository layout](#repository-layout)
+- [Trying it with MCP Inspector](#trying-it-with-mcp-inspector)
 - [Building and testing](#building-and-testing)
 - [Releasing](#releasing)
 - [Limitations](#limitations)
@@ -492,11 +493,39 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 # then POST JSON-RPC to http://localhost:5000/mcp
 ```
 
+## Trying it with MCP Inspector
+
+`docker-compose.yml` runs the sample together with the official
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector), preconfigured to demonstrate the
+per-caller tool exposure above:
+
+```bash
+docker compose up --build
+# then open http://localhost:6274?MCP_INSPECTOR_API_TOKEN=nabu-local-dev
+```
+
+A one-shot init container signs in as `alice` and `root` and writes an Inspector config with three
+connections to the same endpoint - `nabu-anonymous`, `nabu-alice-user` and `nabu-root-admin` - so
+switching between them in the UI shows the tool list grow from the 4 anonymous tools to alice's 10
+to root's 11 (only root gets `todos_delete`). The API itself is published on
+`http://localhost:5080/mcp` (5080 rather than 5000, which macOS AirPlay occupies).
+
+The same comparison from the terminal, via the Inspector CLI:
+
+```bash
+docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+  --server nabu-anonymous --method tools/list
+docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+  --server nabu-root-admin --method tools/list
+```
+
+The demo tokens live for 24 hours; `docker compose up` again regenerates them.
+
 ## Building and testing
 
 ```bash
 dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 199 tests
+dotnet test           # 200 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
