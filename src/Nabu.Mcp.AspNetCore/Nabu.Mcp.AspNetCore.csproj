@@ -8,7 +8,7 @@
       Modern hosts must NOT use the netstandard2.0 asset: it cannot provide post-3.0 features
       such as IHttpResponseBodyFeature on the synthetic request (see McpToolInvoker).
     -->
-    <TargetFrameworks>netstandard2.0;net6.0;net8.0;net10.0</TargetFrameworks>
+    <TargetFrameworks>net10.0;net8.0;netstandard2.0</TargetFrameworks>
     <RootNamespace>Nabu.Mcp.AspNetCore</RootNamespace>
     <AssemblyName>Nabu.Mcp.AspNetCore</AssemblyName>
     <PackageId>Nabu.Mcp.AspNetCore</PackageId>
@@ -52,6 +52,10 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
     <PackageReference Include="System.Text.Json" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
 </Project>
