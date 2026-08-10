@@ -182,23 +182,14 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                         app.UseRouting();
                         app.UseAuthentication();
 
-                        // A fallback policy applies to every request that matches no endpoint, and the MCP
-                        // endpoint is middleware rather than an endpoint - so AuthorizationMiddleware would
-                        // challenge it before Nabu ever saw it. Mounting Nabu ahead of it leaves the MCP
-                        // endpoint governed by RequireAuthorization, while tool calls still traverse the
-                        // whole pipeline and meet the fallback policy at the action.
-                        if (fallbackPolicy)
-                        {
-                            app.UseNabuMcp();
-                        }
+                        // Mounted before UseAuthorization: a fallback policy applies to every request
+                        // that matches no endpoint, and the MCP endpoint is middleware rather than an
+                        // endpoint, so AuthorizationMiddleware would otherwise challenge it before Nabu
+                        // ever saw it. Tool calls still traverse the whole pipeline from the top and
+                        // meet the policy at the action.
+                        app.UseNabuMcp();
 
                         app.UseAuthorization();
-
-                        if (!fallbackPolicy)
-                        {
-                            app.UseNabuMcp();
-                        }
-
                         app.UseEndpoints(endpoints => endpoints.MapControllers());
                     }))
                 .Build();
