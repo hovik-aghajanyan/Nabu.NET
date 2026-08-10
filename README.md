@@ -456,14 +456,14 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ```bash
 dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 180 tests
+dotnet test           # 191 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
 constant parsing and enum coercion as units, and drives the real sample application in memory for
 discovery, invocation, authorization and protocol behaviour - including that a tool call for one user
-never returns another user's data, and that an admin-only action stays admin-only when reached over
-MCP.
+never returns another user's data, that an admin-only action stays admin-only when reached over MCP,
+and that a caller is advertised the tools its own credentials reach and no others.
 
 Every push to `main` and every pull request runs the same build, test and pack on GitHub Actions
 (`.github/workflows/ci.yml`).
