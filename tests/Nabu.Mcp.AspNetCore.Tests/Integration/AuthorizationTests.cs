@@ -20,12 +20,63 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             _fixture = fixture;
         }
 
-        [Fact]
-        public async Task The_mcp_endpoint_rejects_anonymous_callers()
+        private async Task<string[]> ToolNamesAsync(System.Net.Http.Headers.AuthenticationHeaderValue? token = null)
         {
-            using var response = await _fixture.PostRawAsync("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
+            var envelope = await _fixture.RpcAsync("tools/list", token: token);
+            return envelope["result"]!["tools"]!.AsArray()
+                .Select(t => t!["name"]!.GetValue<string>())
+                .ToArray();
+        }
+
+        [Fact]
+        public async Task An_anonymous_caller_is_shown_only_the_actions_marked_AllowAnonymous()
+        {
+            // WeatherController carries [AllowAnonymous]; TodosController carries [Authorize].
+            var names = await ToolNamesAsync();
+
+            Assert.Contains("weather_get_cities", names);
+            Assert.Contains("weather_get_forecast", names);
+            Assert.All(names, name => Assert.StartsWith("weather_", name));
+        }
+
+        [Fact]
+        public async Task An_anonymous_caller_can_call_an_action_marked_AllowAnonymous()
+        {
+            var result = await _fixture.CallToolAsync("weather_get_cities", new JsonObject());
+
+            Assert.False(McpTestFixture.IsError(result));
+            Assert.Contains("Yerevan", McpTestFixture.TextOf(result));
+        }
+
+        [Fact]
+        public async Task An_anonymous_caller_is_challenged_for_an_action_marked_Authorize()
+        {
+            using var response = await _fixture.PostRawAsync(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\"," +
+                "\"params\":{\"name\":\"todos_list\",\"arguments\":{}}}");
 
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task The_todo_tools_appear_once_the_caller_has_signed_in()
+        {
+            var alice = await _fixture.GetTokenAsync("alice");
+            var names = await ToolNamesAsync(alice);
+
+            Assert.Contains("todos_list", names);
+            Assert.Contains("todos_create", names);
+            Assert.Contains("weather_get_cities", names);
+        }
+
+        [Fact]
+        public async Task An_admin_only_action_is_advertised_only_to_an_administrator()
+        {
+            var alice = await _fixture.GetTokenAsync("alice");
+            var root = await _fixture.GetTokenAsync("root");
+
+            Assert.DoesNotContain("todos_delete", await ToolNamesAsync(alice));
+            Assert.Contains("todos_delete", await ToolNamesAsync(root));
         }
 
         [Fact]

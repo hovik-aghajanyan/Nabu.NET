@@ -48,18 +48,22 @@ builder.Services.AddNabuMcp(options =>
     options.Path = "/mcp";
     options.Instructions =
         "Todo and weather tools. Todo tools act on the signed-in user's own items; " +
-        "deleting an item requires an administrator token.";
+        "deleting an item requires an administrator token. Sign in to see the todo tools.";
 
-    // The MCP endpoint itself requires an authenticated caller. Individual actions are still
-    // authorized independently by their own [Authorize] attributes.
+    // The MCP endpoint requires an authenticated caller. Individual actions are still authorized
+    // independently by their own [Authorize] attributes.
     options.RequireAuthorization = true;
 
-    // Uncomment to let a client be added before it holds a token: it would then connect anonymously,
-    // be advertised only the weather tools - the ones carrying [AllowAnonymous] - and be able to call
-    // them, while everything else answers 401 until it authenticates and lists the tools again.
-    //
-    // options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
-    // options.ToolVisibility = McpToolVisibility.Authorized;
+    // ...except that a client may be added before it has a token. It then sees only the weather tools -
+    // WeatherController carries [AllowAnonymous], so those actions are reachable by anyone - and may
+    // call them. The todo tools are neither advertised nor callable until it signs in, because
+    // TodosController carries [Authorize]; asking for one answers 401, which is the signal a client
+    // needs to go and authenticate.
+    options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+
+    // Each caller is advertised what its own credentials reach: anonymous callers see the weather
+    // tools, alice sees hers as well, and only an administrator is shown todos_delete.
+    options.ToolVisibility = McpToolVisibility.Authorized;
 });
 
 var app = builder.Build();

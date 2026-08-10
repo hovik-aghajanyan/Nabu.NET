@@ -137,6 +137,45 @@ namespace Nabu.Mcp.AspNetCore.Server
             return false;
         }
 
+        /// <summary>
+        /// Whether the caller presented credentials that were rejected. The anonymous door is for clients
+        /// that hold none yet; a caller whose token was refused is challenged instead, so that a stale or
+        /// malformed token is never mistaken for a deliberate anonymous request.
+        /// </summary>
+        private async Task<bool> HasRejectedCredentialsAsync(HttpContext context)
+        {
+            if (context.RequestServices?.GetService(typeof(IAuthenticationService)) == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                if (_options.AuthenticationSchemes.Count == 0)
+                {
+                    var result = await context.AuthenticateAsync().ConfigureAwait(false);
+                    return result?.Failure != null;
+                }
+
+                foreach (var scheme in _options.AuthenticationSchemes)
+                {
+                    var result = await context.AuthenticateAsync(scheme).ConfigureAwait(false);
+                    if (result?.Failure != null)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // No default scheme, or no such scheme. Nothing was rejected because nothing was tried.
+                _logger.LogDebug(ex, "Nabu MCP could not inspect the caller's credentials before answering anonymously.");
+                return false;
+            }
+        }
+
         private async Task ChallengeAsync(HttpContext context)
         {
             if (_options.AuthenticationSchemes.Count == 0)
@@ -193,12 +232,16 @@ namespace Nabu.Mcp.AspNetCore.Server
                 return;
             }
 
-            if (_options.RequireAuthorization &&
-                _options.AnonymousAccess != McpAnonymousAccess.None &&
-                handler.RequiresEndpointAuthorization(requests) &&
-                !await AuthorizeAsync(context).ConfigureAwait(false))
+            if (_options.RequireAuthorization && _options.AnonymousAccess != McpAnonymousAccess.None)
             {
-                return;
+                var needsAuthorization =
+                    await handler.RequiresEndpointAuthorizationAsync(requests, context, context.RequestAborted).ConfigureAwait(false) ||
+                    await HasRejectedCredentialsAsync(context).ConfigureAwait(false);
+
+                if (needsAuthorization && !await AuthorizeAsync(context).ConfigureAwait(false))
+                {
+                    return;
+                }
             }
 
             var responses = new JsonArray();

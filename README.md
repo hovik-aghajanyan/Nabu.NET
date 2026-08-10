@@ -323,10 +323,20 @@ options.ToolVisibility = McpToolVisibility.Authorized;
 | `Authorized` | Tools whose actions need authorization, only once the caller satisfies their policies. |
 
 Nabu reads the requirement during discovery, from the `[Authorize]` and `[AllowAnonymous]` metadata of
-the action, its controller and the filter collection - `[AllowAnonymous]` wins, exactly as it does in
-MVC - and evaluates it against the caller with the application's own `IAuthorizationPolicyProvider` and
-`IAuthorizationService`. An unauthenticated caller is therefore shown only the tools that need no
-authorization; the rest appear when it lists the tools again with credentials.
+the action, its controller and the filter collection, and resolves it the way `AuthorizationMiddleware`
+would for a real request:
+
+- `[AllowAnonymous]` on the action or the controller wins outright, exactly as it does in MVC.
+- `[Authorize]` - with a policy, roles, or schemes - is combined into a single policy, including a
+  globally registered `AuthorizeFilter`.
+- An action carrying **neither** is not assumed to be public: `AuthorizationOptions.FallbackPolicy`
+  applies to it, so in a secure-by-default application every action is protected until an
+  `[AllowAnonymous]` opts it out, and the tool list says the same.
+
+The resolved policy is then evaluated against the caller with the application's own
+`IAuthorizationPolicyProvider` and `IAuthorizationService`. An unauthenticated caller is therefore
+shown only the tools that need no authorization; the rest appear when it lists the tools again with
+credentials.
 
 This decides what is *advertised*, never what is allowed. A hidden tool that gets called anyway is
 still replayed through the pipeline and still refused by the action, so filtering can never be the only
@@ -366,6 +376,16 @@ Now a client added without credentials connects, lists the public tools and can 
 else is a 401, which is exactly the signal a client needs to start authenticating; and once it does, the
 next `tools/list` returns the full set it is entitled to. Pair the two options as above - `AnonymousAccess`
 on its own would advertise tools the anonymous caller cannot call.
+
+The door is only open to callers that hold no credentials. One that presents a token which is *rejected*
+is challenged as before, so an expired or malformed token is never quietly downgraded to the anonymous
+tool list.
+
+> If the application sets `AuthorizationOptions.FallbackPolicy`, mount `UseNabuMcp()` **before**
+> `UseAuthorization()`. A fallback policy applies to every request that matches no endpoint, and the MCP
+> endpoint is middleware rather than an endpoint, so authorization would otherwise challenge it before
+> Nabu saw it - `AnonymousAccess` included. Tool calls are unaffected either way: they traverse the
+> whole pipeline and meet the fallback policy at the action.
 
 Because the server is stateless it cannot push `notifications/tools/list_changed`, so a client that
 caches the tool list should re-list after authenticating.
@@ -446,6 +466,12 @@ tests/Nabu.Mcp.AspNetCore.Tests/  unit and integration tests
 The sample is a working API with JWT bearer authentication, a role-based policy, model validation and
 XML documentation. Two accounts exist, both with the password `password`: `alice` (user) and `root`
 (user + admin).
+
+It is wired up for per-caller tool visibility, so the two attributes are visible at work: connect
+without a token and `tools/list` returns only the `weather_*` tools, because `WeatherController` carries
+`[AllowAnonymous]` - and they can be called. The `todos_*` tools are neither advertised nor callable
+until you sign in, because `TodosController` carries `[Authorize]`, and `todos_delete` appears only for
+`root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
 
 ```bash
 dotnet run --project samples/Nabu.Sample.TodoApi

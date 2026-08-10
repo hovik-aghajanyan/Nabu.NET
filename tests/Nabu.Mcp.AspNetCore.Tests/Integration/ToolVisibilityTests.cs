@@ -31,6 +31,9 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         public const string SchemeName = "Test";
         public const string UserHeader = "X-Test-User";
 
+        /// <summary>A header value the handler refuses, standing in for an expired or malformed token.</summary>
+        public const string RejectedUser = "!rejected";
+
         public TestAuthHandler(
             IOptionsMonitor<AuthenticationSchemeOptions> options,
             ILoggerFactory logger,
@@ -45,6 +48,11 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             if (string.IsNullOrEmpty(header))
             {
                 return Task.FromResult(AuthenticateResult.NoResult());
+            }
+
+            if (string.Equals(header, RejectedUser, StringComparison.Ordinal))
+            {
+                return Task.FromResult(AuthenticateResult.Fail("The credentials were rejected."));
             }
 
             var parts = header.Split(':');
@@ -96,6 +104,25 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
     }
 
     /// <summary>
+    /// Actions carrying no authorization attributes at all, for an application that secures everything
+    /// with <c>AuthorizationOptions.FallbackPolicy</c> and opens individual actions with
+    /// <c>[AllowAnonymous]</c>.
+    /// </summary>
+    [ApiController]
+    [Route("fallback")]
+    public class FallbackController : ControllerBase
+    {
+        /// <summary>Carries nothing, so the fallback policy protects it.</summary>
+        [HttpGet("plain")]
+        public IActionResult Plain() => Ok(new { ok = true });
+
+        /// <summary>Opted out of the fallback policy.</summary>
+        [HttpGet("open")]
+        [AllowAnonymous]
+        public IActionResult Open() => Ok(new { ok = true });
+    }
+
+    /// <summary>
     /// A client that has not authorized yet should be advertised the tools it can actually use, and the
     /// rest should appear once it has.
     /// </summary>
@@ -106,20 +133,37 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
         private static TestServer CreateServer(Action<NabuMcpOptions> configure)
         {
+            return CreateServer(typeof(VisibilityController), configure, fallbackPolicy: false);
+        }
+
+        private static TestServer CreateFallbackServer(Action<NabuMcpOptions> configure)
+        {
+            return CreateServer(typeof(FallbackController), configure, fallbackPolicy: true);
+        }
+
+        private static TestServer CreateServer(Type controller, Action<NabuMcpOptions> configure, bool fallbackPolicy)
+        {
             var builder = new WebHostBuilder()
                 .ConfigureServices(services =>
                 {
                     services
                         .AddControllers()
                         .AddApplicationPart(typeof(VisibilityController).Assembly)
-                        .OnlyControllers(typeof(VisibilityController));
+                        .OnlyControllers(controller);
 
                     services
                         .AddAuthentication(TestAuthHandler.SchemeName)
                         .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
 
                     services.AddAuthorization(options =>
-                        options.AddPolicy("AdminOnly", policy => policy.RequireRole("admin")));
+                    {
+                        options.AddPolicy("AdminOnly", policy => policy.RequireRole("admin"));
+
+                        if (fallbackPolicy)
+                        {
+                            options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+                        }
+                    });
 
                     services.AddNabuMcp(options =>
                     {
@@ -135,8 +179,24 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 {
                     app.UseRouting();
                     app.UseAuthentication();
+
+                    // A fallback policy applies to every request that matches no endpoint, and the MCP
+                    // endpoint is middleware rather than an endpoint - so AuthorizationMiddleware would
+                    // challenge it before Nabu ever saw it. Mounting Nabu ahead of it leaves the MCP
+                    // endpoint governed by RequireAuthorization, while tool calls still traverse the
+                    // whole pipeline and meet the fallback policy at the action.
+                    if (fallbackPolicy)
+                    {
+                        app.UseNabuMcp();
+                    }
+
                     app.UseAuthorization();
-                    app.UseNabuMcp();
+
+                    if (!fallbackPolicy)
+                    {
+                        app.UseNabuMcp();
+                    }
+
                     app.UseEndpoints(endpoints => endpoints.MapControllers());
                 });
 
@@ -363,6 +423,65 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 server,
                 "tools/call",
                 new JsonObject { ["name"] = "no_such_tool", ["arguments"] = new JsonObject() });
+
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task A_fallback_policy_makes_an_action_without_attributes_protected()
+        {
+            using var server = CreateFallbackServer(options => options.ToolVisibility = McpToolVisibility.Authorized);
+
+            // fallback_plain carries no attributes at all, so the application's fallback policy applies
+            // to it exactly as it would to a browser request; only [AllowAnonymous] opts out.
+            Assert.Equal(new[] { "fallback_open" }, await ToolNamesAsync(server));
+            Assert.Equal(new[] { "fallback_open", "fallback_plain" }, await ToolNamesAsync(server, Alice));
+        }
+
+        [Fact]
+        public async Task The_fallback_policy_verdict_matches_what_the_pipeline_does()
+        {
+            using var server = CreateFallbackServer(options => options.ToolVisibility = McpToolVisibility.Authorized);
+
+            var hidden = await CallAsync(server, "fallback_plain");
+            Assert.True(hidden["result"]!["isError"]!.GetValue<bool>());
+            Assert.Contains("401", hidden["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>());
+
+            var advertised = await CallAsync(server, "fallback_open");
+            Assert.False(advertised["result"]!["isError"]!.GetValue<bool>());
+        }
+
+        [Fact]
+        public async Task The_anonymous_door_is_closed_for_an_action_the_fallback_policy_protects()
+        {
+            using var server = CreateFallbackServer(options =>
+            {
+                options.RequireAuthorization = true;
+                options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+                options.ToolVisibility = McpToolVisibility.Authorized;
+            });
+
+            var open = await CallAsync(server, "fallback_open");
+            Assert.False(open["result"]!["isError"]!.GetValue<bool>());
+
+            using var plain = await PostAsync(
+                server,
+                "tools/call",
+                new JsonObject { ["name"] = "fallback_plain", ["arguments"] = new JsonObject() });
+            Assert.Equal(HttpStatusCode.Unauthorized, plain.StatusCode);
+        }
+
+        [Fact]
+        public async Task Credentials_that_were_rejected_are_not_treated_as_an_anonymous_caller()
+        {
+            using var server = CreateServer(options =>
+            {
+                options.RequireAuthorization = true;
+                options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+                options.ToolVisibility = McpToolVisibility.Authorized;
+            });
+
+            using var response = await PostAsync(server, "tools/list", user: TestAuthHandler.RejectedUser);
 
             Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         }

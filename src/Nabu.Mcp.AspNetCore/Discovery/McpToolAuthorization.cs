@@ -31,8 +31,8 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             Policies = policies ?? NoPolicies;
             RequiresAuthorizationOverride = requiresAuthorizationOverride;
 
-            RequiresAuthorization = requiresAuthorizationOverride
-                ?? (!allowsAnonymous && (AuthorizeData.Count > 0 || Policies.Count > 0));
+            HasAuthorizationMetadata = AuthorizeData.Count > 0 || Policies.Count > 0;
+            RequiresAuthorization = requiresAuthorizationOverride ?? (!allowsAnonymous && HasAuthorizationMetadata);
         }
 
         /// <summary>
@@ -59,9 +59,22 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public bool? RequiresAuthorizationOverride { get; }
 
         /// <summary>
-        /// Whether a caller has to be authorized before the tool is worth advertising. Honours
+        /// Whether the action carries any <c>[Authorize]</c> metadata of its own. An action with none is
+        /// not necessarily anonymous: the application's fallback policy applies to it, which is why the
+        /// final say belongs to <see cref="Server.IMcpToolAuthorizationEvaluator"/> rather than here.
+        /// </summary>
+        public bool HasAuthorizationMetadata { get; }
+
+        /// <summary>
+        /// Whether the action's own metadata demands authorization. Honours
         /// <see cref="RequiresAuthorizationOverride"/> when the tool declared one.
         /// </summary>
+        /// <remarks>
+        /// Reads the action in isolation, so it stays <c>false</c> for an action that carries nothing and
+        /// is protected only by <c>AuthorizationOptions.FallbackPolicy</c>. Ask
+        /// <see cref="Server.IMcpToolAuthorizationEvaluator.RequiresAuthorizationAsync"/> for the answer
+        /// that accounts for the application's configuration as well.
+        /// </remarks>
         public bool RequiresAuthorization { get; }
     }
 }

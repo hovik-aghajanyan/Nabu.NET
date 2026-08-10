@@ -20,7 +20,9 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
         private async Task<JsonArray> ListToolsAsync()
         {
-            var token = await _fixture.GetTokenAsync("alice");
+            // As an administrator, so that discovery is measured against the whole catalogue rather than
+            // the subset one caller happens to be authorized for.
+            var token = await _fixture.GetTokenAsync("root");
             var envelope = await _fixture.RpcAsync("tools/list", token: token);
             return envelope["result"]!["tools"]!.AsArray();
         }

@@ -228,7 +228,10 @@ namespace Nabu.Mcp.AspNetCore.Server
         /// which case discovery - and, at the widest setting, calls to tools that need no authorization -
         /// is answered for callers that hold no credentials yet.
         /// </summary>
-        internal bool RequiresEndpointAuthorization(IReadOnlyList<JsonRpcRequest> requests)
+        internal async Task<bool> RequiresEndpointAuthorizationAsync(
+            IReadOnlyList<JsonRpcRequest> requests,
+            HttpContext context,
+            CancellationToken cancellationToken)
         {
             var access = _options.AnonymousAccess;
             if (access == McpAnonymousAccess.None)
@@ -245,7 +248,7 @@ namespace Nabu.Mcp.AspNetCore.Server
 
                 if (access == McpAnonymousAccess.AnonymousTools &&
                     string.Equals(request.Method, "tools/call", StringComparison.Ordinal) &&
-                    IsAnonymousTool(request))
+                    await IsAnonymousToolAsync(request, context, cancellationToken).ConfigureAwait(false))
                 {
                     continue;
                 }
@@ -256,7 +259,12 @@ namespace Nabu.Mcp.AspNetCore.Server
             return false;
         }
 
-        private bool IsAnonymousTool(JsonRpcRequest request)
+        /// <summary>
+        /// Whether this call targets a tool the application itself would let an anonymous caller reach.
+        /// Anything unclear counts as protected: this decides who gets in, so it errs towards the
+        /// challenge rather than towards the door.
+        /// </summary>
+        private async Task<bool> IsAnonymousToolAsync(JsonRpcRequest request, HttpContext context, CancellationToken cancellationToken)
         {
             string? name;
             try
@@ -275,7 +283,22 @@ namespace Nabu.Mcp.AspNetCore.Server
                 return false;
             }
 
-            return !(tool!.Authorization ?? McpToolAuthorization.None).RequiresAuthorization;
+            try
+            {
+                return !await _authorization.RequiresAuthorizationAsync(tool!, context, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Nabu MCP could not decide whether {Tool} is reachable anonymously; requiring authorization.",
+                    tool!.Name);
+                return false;
+            }
         }
 
         private static bool IsDiscoveryMethod(string method)

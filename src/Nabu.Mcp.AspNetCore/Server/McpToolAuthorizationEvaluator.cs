@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,9 +14,10 @@ using Nabu.Mcp.AspNetCore.Discovery;
 namespace Nabu.Mcp.AspNetCore.Server
 {
     /// <summary>
-    /// Default <see cref="IMcpToolAuthorizationEvaluator"/>: reads the <c>[Authorize]</c> metadata the
-    /// registry collected for the action and evaluates it against the current caller with the
-    /// application's own policy provider and authorization service.
+    /// Default <see cref="IMcpToolAuthorizationEvaluator"/>: reads the <c>[Authorize]</c> and
+    /// <c>[AllowAnonymous]</c> metadata the registry collected for the action, resolves it into a policy
+    /// the same way <c>AuthorizationMiddleware</c> would - including the application's fallback policy
+    /// when the action carries no metadata of its own - and evaluates it against the current caller.
     /// </summary>
     /// <remarks>
     /// The evaluation is deliberately one-sided. It can hide a tool from a caller, and it never lets one
@@ -37,6 +39,32 @@ namespace Nabu.Mcp.AspNetCore.Server
             _logger = (ILogger?)logger ?? NullLogger.Instance;
         }
 
+        public async Task<bool> RequiresAuthorizationAsync(McpToolDescriptor tool, HttpContext context, CancellationToken cancellationToken)
+        {
+            if (tool == null)
+            {
+                throw new ArgumentNullException(nameof(tool));
+            }
+
+            if (context == null)
+            {
+                throw new ArgumentNullException(nameof(context));
+            }
+
+            var policyProvider = GetService<IAuthorizationPolicyProvider>(context);
+            if (policyProvider == null)
+            {
+                // This question gates access rather than presentation, so an unknown answer means
+                // "protected" - the caller is challenged instead of being waved through.
+                return true;
+            }
+
+            var policy = await ResolvePolicyAsync(tool.Authorization ?? McpToolAuthorization.None, policyProvider)
+                .ConfigureAwait(false);
+
+            return policy != null;
+        }
+
         public async Task<bool> IsVisibleAsync(McpToolDescriptor tool, HttpContext context, CancellationToken cancellationToken)
         {
             if (tool == null)
@@ -55,21 +83,20 @@ namespace Nabu.Mcp.AspNetCore.Server
             }
 
             var authorization = tool.Authorization ?? McpToolAuthorization.None;
-            if (!authorization.RequiresAuthorization)
-            {
-                return true;
-            }
 
-            var services = context.RequestServices;
-            var policyProvider = services?.GetService(typeof(IAuthorizationPolicyProvider)) as IAuthorizationPolicyProvider;
-            var authorizationService = services?.GetService(typeof(IAuthorizationService)) as IAuthorizationService;
+            var policyProvider = GetService<IAuthorizationPolicyProvider>(context);
+            var authorizationService = GetService<IAuthorizationService>(context);
 
             if (policyProvider == null || authorizationService == null)
             {
-                _logger.LogWarning(
-                    "Nabu MCP cannot filter the tool list for '{Tool}': ASP.NET Core authorization services are not " +
-                    "registered. Call services.AddAuthorization() or set NabuMcpOptions.ToolVisibility back to All.",
-                    tool.Name);
+                if (authorization.RequiresAuthorization)
+                {
+                    _logger.LogWarning(
+                        "Nabu MCP cannot filter the tool list for '{Tool}': ASP.NET Core authorization services are not " +
+                        "registered. Call services.AddAuthorization() or set NabuMcpOptions.ToolVisibility back to All.",
+                        tool.Name);
+                }
+
                 return true;
             }
 
@@ -107,15 +134,37 @@ namespace Nabu.Mcp.AspNetCore.Server
         }
 
         /// <summary>
-        /// Combines everything the action demands into one policy: the <c>[Authorize]</c> metadata, plus
-        /// any policy instance contributed by a filter. An action forced to be protected through
-        /// <see cref="McpToolAttribute.RequiresAuthorization"/> without carrying metadata of its own is
-        /// measured against the application's default policy.
+        /// The policy the action would be authorized against, or <c>null</c> when it is reachable
+        /// anonymously. This mirrors what <c>AuthorizationMiddleware</c> does for a real request:
+        /// <c>[AllowAnonymous]</c> wins outright, <c>[Authorize]</c> metadata is combined into one
+        /// policy, and an action carrying neither falls back to <c>AuthorizationOptions.FallbackPolicy</c>
+        /// - which is <c>null</c>, and therefore anonymous, unless the application set one.
         /// </summary>
         protected virtual async Task<AuthorizationPolicy?> ResolvePolicyAsync(
             McpToolAuthorization authorization,
             IAuthorizationPolicyProvider policyProvider)
         {
+            if (authorization == null)
+            {
+                throw new ArgumentNullException(nameof(authorization));
+            }
+
+            if (policyProvider == null)
+            {
+                throw new ArgumentNullException(nameof(policyProvider));
+            }
+
+            var forced = authorization.RequiresAuthorizationOverride;
+            if (forced == false)
+            {
+                return null;
+            }
+
+            if (authorization.AllowsAnonymous && forced != true)
+            {
+                return null;
+            }
+
             AuthorizationPolicy? policy = null;
 
             if (authorization.AuthorizeData.Count > 0)
@@ -134,7 +183,16 @@ namespace Nabu.Mcp.AspNetCore.Server
                 policy = builder.Build();
             }
 
-            return policy ?? await policyProvider.GetDefaultPolicyAsync().ConfigureAwait(false);
+            if (policy != null)
+            {
+                return policy;
+            }
+
+            // A tool that declared itself protected without carrying metadata is measured against the
+            // application's default policy; anything else against the fallback policy, if there is one.
+            return forced == true
+                ? await policyProvider.GetDefaultPolicyAsync().ConfigureAwait(false)
+                : await GetFallbackPolicyAsync(policyProvider).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -175,6 +233,34 @@ namespace Nabu.Mcp.AspNetCore.Server
             }
 
             return principal ?? new ClaimsPrincipal(new ClaimsIdentity());
+        }
+
+        /// <summary>
+        /// <c>GetFallbackPolicyAsync</c> arrived in ASP.NET Core 3.0. On 2.x there is no such concept, and
+        /// an action without <c>[Authorize]</c> is simply anonymous.
+        /// </summary>
+        private static async Task<AuthorizationPolicy?> GetFallbackPolicyAsync(IAuthorizationPolicyProvider policyProvider)
+        {
+            try
+            {
+                return await GetFallbackPolicyCoreAsync(policyProvider).ConfigureAwait(false);
+            }
+            catch (MissingMemberException)
+            {
+                return null;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static Task<AuthorizationPolicy?> GetFallbackPolicyCoreAsync(IAuthorizationPolicyProvider policyProvider)
+        {
+            return policyProvider.GetFallbackPolicyAsync();
+        }
+
+        private static T? GetService<T>(HttpContext context)
+            where T : class
+        {
+            return context.RequestServices?.GetService(typeof(T)) as T;
         }
 
         private static ClaimsPrincipal Merge(ClaimsPrincipal? existing, ClaimsPrincipal added)
