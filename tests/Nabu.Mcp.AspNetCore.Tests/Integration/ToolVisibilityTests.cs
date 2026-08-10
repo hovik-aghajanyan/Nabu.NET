@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Nabu.Mcp.AspNetCore.Discovery;
@@ -125,80 +126,89 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         private const string Alice = "alice";
         private const string Root = "root:admin";
 
-        private static TestServer CreateServer(Action<NabuMcpOptions> configure)
+        private static IHost CreateServer(Action<NabuMcpOptions> configure)
         {
             return CreateServer(typeof(VisibilityController), configure, fallbackPolicy: false);
         }
 
-        private static TestServer CreateFallbackServer(Action<NabuMcpOptions> configure)
+        private static IHost CreateFallbackServer(Action<NabuMcpOptions> configure)
         {
             return CreateServer(typeof(FallbackController), configure, fallbackPolicy: true);
         }
 
-        private static TestServer CreateServer(Type controller, Action<NabuMcpOptions> configure, bool fallbackPolicy)
+        /// <summary>
+        /// Hosts an in-memory application. WebHostBuilder is deprecated (ASPDEPR004), so the server is
+        /// built on the generic host; the returned <see cref="IHost"/> owns the TestServer and must be
+        /// disposed by the caller.
+        /// </summary>
+        private static IHost CreateServer(Type controller, Action<NabuMcpOptions> configure, bool fallbackPolicy)
         {
-            var builder = new WebHostBuilder()
-                .ConfigureServices(services =>
-                {
-                    services
-                        .AddControllers()
-                        .AddApplicationPart(typeof(VisibilityController).Assembly)
-                        .OnlyControllers(controller);
-
-                    services
-                        .AddAuthentication(TestAuthHandler.SchemeName)
-                        .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
-
-                    services.AddAuthorization(options =>
+            var host = new HostBuilder()
+                .ConfigureWebHost(webHost => webHost
+                    .UseTestServer()
+                    .ConfigureServices(services =>
                     {
-                        options.AddPolicy("AdminOnly", policy => policy.RequireRole("admin"));
+                        services
+                            .AddControllers()
+                            .AddApplicationPart(typeof(VisibilityController).Assembly)
+                            .OnlyControllers(controller);
 
+                        services
+                            .AddAuthentication(TestAuthHandler.SchemeName)
+                            .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
+
+                        services.AddAuthorization(options =>
+                        {
+                            options.AddPolicy("AdminOnly", policy => policy.RequireRole("admin"));
+
+                            if (fallbackPolicy)
+                            {
+                                options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+                            }
+                        });
+
+                        services.AddNabuMcp(options =>
+                        {
+                            options.ExposeAllActions = true;
+
+                            // So the replayed request re-authenticates the same way a real one would.
+                            options.ForwardedHeaders.Add(TestAuthHandler.UserHeader);
+
+                            configure(options);
+                        });
+                    })
+                    .Configure(app =>
+                    {
+                        app.UseRouting();
+                        app.UseAuthentication();
+
+                        // A fallback policy applies to every request that matches no endpoint, and the MCP
+                        // endpoint is middleware rather than an endpoint - so AuthorizationMiddleware would
+                        // challenge it before Nabu ever saw it. Mounting Nabu ahead of it leaves the MCP
+                        // endpoint governed by RequireAuthorization, while tool calls still traverse the
+                        // whole pipeline and meet the fallback policy at the action.
                         if (fallbackPolicy)
                         {
-                            options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+                            app.UseNabuMcp();
                         }
-                    });
 
-                    services.AddNabuMcp(options =>
-                    {
-                        options.ExposeAllActions = true;
+                        app.UseAuthorization();
 
-                        // So the replayed request re-authenticates the same way a real one would.
-                        options.ForwardedHeaders.Add(TestAuthHandler.UserHeader);
+                        if (!fallbackPolicy)
+                        {
+                            app.UseNabuMcp();
+                        }
 
-                        configure(options);
-                    });
-                })
-                .Configure(app =>
-                {
-                    app.UseRouting();
-                    app.UseAuthentication();
+                        app.UseEndpoints(endpoints => endpoints.MapControllers());
+                    }))
+                .Build();
 
-                    // A fallback policy applies to every request that matches no endpoint, and the MCP
-                    // endpoint is middleware rather than an endpoint - so AuthorizationMiddleware would
-                    // challenge it before Nabu ever saw it. Mounting Nabu ahead of it leaves the MCP
-                    // endpoint governed by RequireAuthorization, while tool calls still traverse the
-                    // whole pipeline and meet the fallback policy at the action.
-                    if (fallbackPolicy)
-                    {
-                        app.UseNabuMcp();
-                    }
-
-                    app.UseAuthorization();
-
-                    if (!fallbackPolicy)
-                    {
-                        app.UseNabuMcp();
-                    }
-
-                    app.UseEndpoints(endpoints => endpoints.MapControllers());
-                });
-
-            return new TestServer(builder);
+            host.Start();
+            return host;
         }
 
         private static async Task<HttpResponseMessage> PostAsync(
-            TestServer server,
+            IHost server,
             string method,
             JsonObject? parameters = null,
             string? user = null)
@@ -215,7 +225,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 request["params"] = parameters;
             }
 
-            var client = server.CreateClient();
+            var client = server.GetTestClient();
             if (user != null)
             {
                 client.DefaultRequestHeaders.Add(TestAuthHandler.UserHeader, user);
@@ -227,7 +237,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         }
 
         private static async Task<JsonObject> RpcAsync(
-            TestServer server,
+            IHost server,
             string method,
             JsonObject? parameters = null,
             string? user = null)
@@ -242,7 +252,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             return JsonNode.Parse(text)!.AsObject();
         }
 
-        private static async Task<string[]> ToolNamesAsync(TestServer server, string? user = null)
+        private static async Task<string[]> ToolNamesAsync(IHost server, string? user = null)
         {
             var envelope = await RpcAsync(server, "tools/list", user: user);
             return envelope["result"]!["tools"]!.AsArray()
@@ -251,7 +261,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 .ToArray();
         }
 
-        private static Task<JsonObject> CallAsync(TestServer server, string tool, string? user = null)
+        private static Task<JsonObject> CallAsync(IHost server, string tool, string? user = null)
         {
             return RpcAsync(
                 server,
