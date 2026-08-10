@@ -182,6 +182,20 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         }
 
         [Fact]
+        public async Task Get_without_credentials_answers_405_not_401()
+        {
+            // Streamable HTTP clients (VS Code among them) probe the endpoint with a GET to open
+            // the server-to-client stream. A 401 here would send them into OAuth discovery; the
+            // spec's answer for an unsupported verb is 405.
+            var client = _fixture.CreateClient();
+
+            using var response = await client.GetAsync("/mcp");
+
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+            Assert.Contains("POST", response.Content.Headers.Allow);
+        }
+
+        [Fact]
         public async Task Delete_terminates_the_session_without_error()
         {
             var token = await _fixture.GetTokenAsync("alice");

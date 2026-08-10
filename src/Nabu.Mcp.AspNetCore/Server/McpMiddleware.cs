@@ -44,11 +44,13 @@ namespace Nabu.Mcp.AspNetCore.Server
 
             var method = context.Request.Method.ToUpperInvariant();
 
-            // A POST is gated after it has been parsed when anonymous access is open, because which
-            // JSON-RPC methods it carries is what decides whether credentials are needed at all.
+            // When anonymous access is closed every request is gated up front. When it is open, a
+            // POST is gated after it has been parsed, because which JSON-RPC methods it carries is
+            // what decides whether credentials are needed at all - and the remaining verbs stay
+            // open too: answering an anonymous GET with 401 instead of the spec's 405 sends clients
+            // into an OAuth discovery flow this server does not offer.
             var gateHere = _options.RequireAuthorization &&
-                           (_options.AnonymousAccess == McpAnonymousAccess.None ||
-                            !string.Equals(method, "POST", StringComparison.Ordinal));
+                           _options.AnonymousAccess == McpAnonymousAccess.None;
 
             if (gateHere && !await AuthorizeAsync(context).ConfigureAwait(false))
             {
