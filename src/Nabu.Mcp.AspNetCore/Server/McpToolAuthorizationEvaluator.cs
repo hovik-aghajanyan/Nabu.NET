@@ -154,13 +154,7 @@ namespace Nabu.Mcp.AspNetCore.Server
                 throw new ArgumentNullException(nameof(policyProvider));
             }
 
-            var forced = authorization.RequiresAuthorizationOverride;
-            if (forced == false)
-            {
-                return null;
-            }
-
-            if (authorization.AllowsAnonymous && forced != true)
+            if (authorization.AllowsAnonymous)
             {
                 return null;
             }
@@ -183,16 +177,9 @@ namespace Nabu.Mcp.AspNetCore.Server
                 policy = builder.Build();
             }
 
-            if (policy != null)
-            {
-                return policy;
-            }
-
-            // A tool that declared itself protected without carrying metadata is measured against the
-            // application's default policy; anything else against the fallback policy, if there is one.
-            return forced == true
-                ? await policyProvider.GetDefaultPolicyAsync().ConfigureAwait(false)
-                : await GetFallbackPolicyAsync(policyProvider).ConfigureAwait(false);
+            // Nothing of its own: the application's fallback policy applies, exactly as it would to a
+            // request that reached the action over HTTP.
+            return policy ?? await GetFallbackPolicyAsync(policyProvider).ConfigureAwait(false);
         }
 
         /// <summary>

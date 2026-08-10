@@ -30,6 +30,22 @@ namespace Nabu.Sample.TodoApi.Controllers
 
         private string Owner => User.FindFirstValue(ClaimTypes.Name) ?? User.Identity?.Name ?? "anonymous";
 
+        /// <summary>Lists the priority levels a todo item can be given.</summary>
+        /// <remarks>
+        /// Reference data, of no use to anyone as a secret, so the action opts out of the controller's
+        /// <see cref="AuthorizeAttribute"/> with a plain <see cref="AllowAnonymousAttribute"/>. That is
+        /// all it takes: <c>[AllowAnonymous]</c> wins over the controller's <c>[Authorize]</c> for a tool
+        /// call exactly as it does for an HTTP request, so this is the one todo tool an unauthenticated
+        /// caller is shown - and the only one it can call.
+        /// </remarks>
+        [HttpGet("priorities")]
+        [AllowAnonymous]
+        [McpTool]
+        public ActionResult<IEnumerable<string>> GetPriorities()
+        {
+            return Ok(Enum.GetNames(typeof(TodoPriority)));
+        }
+
         /// <summary>Lists the todo items belonging to the signed-in user.</summary>
         /// <param name="isCompleted">Filters by completion state. Omit to return both.</param>
         /// <param name="priority">Filters by priority.</param>

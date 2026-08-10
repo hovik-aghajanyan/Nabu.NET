@@ -16,33 +16,31 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         private static readonly IAuthorizeData[] NoAuthorizeData = new IAuthorizeData[0];
         private static readonly AuthorizationPolicy[] NoPolicies = new AuthorizationPolicy[0];
 
-        /// <summary>An action that demands nothing, and is therefore reachable anonymously.</summary>
-        public static readonly McpToolAuthorization None =
-            new McpToolAuthorization(false, NoAuthorizeData, NoPolicies, null);
+        /// <summary>An action that demands nothing of its own.</summary>
+        public static readonly McpToolAuthorization None = new McpToolAuthorization(false, NoAuthorizeData, NoPolicies);
 
         public McpToolAuthorization(
             bool allowsAnonymous,
             IReadOnlyList<IAuthorizeData>? authorizeData,
-            IReadOnlyList<AuthorizationPolicy>? policies,
-            bool? requiresAuthorizationOverride)
+            IReadOnlyList<AuthorizationPolicy>? policies)
         {
             AllowsAnonymous = allowsAnonymous;
             AuthorizeData = authorizeData ?? NoAuthorizeData;
             Policies = policies ?? NoPolicies;
-            RequiresAuthorizationOverride = requiresAuthorizationOverride;
 
             HasAuthorizationMetadata = AuthorizeData.Count > 0 || Policies.Count > 0;
-            RequiresAuthorization = requiresAuthorizationOverride ?? (!allowsAnonymous && HasAuthorizationMetadata);
+            RequiresAuthorization = !allowsAnonymous && HasAuthorizationMetadata;
         }
 
         /// <summary>
         /// True when <c>[AllowAnonymous]</c> (or an <c>IAllowAnonymousFilter</c>) applies to the action.
-        /// As in MVC, it wins over every <c>[Authorize]</c> that also applies.
+        /// As in MVC, it wins over every <c>[Authorize]</c> that also applies, and over the application's
+        /// fallback policy.
         /// </summary>
         public bool AllowsAnonymous { get; }
 
         /// <summary>
-        /// The <c>[Authorize]</c> metadata found on the action, its controller and the global filter
+        /// The <c>[Authorize]</c> metadata found on the action, its controller and the filter
         /// collection. Combined into a single policy when the caller is evaluated.
         /// </summary>
         public IReadOnlyList<IAuthorizeData> AuthorizeData { get; }
@@ -54,11 +52,6 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public IReadOnlyList<AuthorizationPolicy> Policies { get; }
 
         /// <summary>
-        /// The value of <see cref="McpToolAttribute.RequiresAuthorization"/>, when the tool set one.
-        /// </summary>
-        public bool? RequiresAuthorizationOverride { get; }
-
-        /// <summary>
         /// Whether the action carries any <c>[Authorize]</c> metadata of its own. An action with none is
         /// not necessarily anonymous: the application's fallback policy applies to it, which is why the
         /// final say belongs to <see cref="Server.IMcpToolAuthorizationEvaluator"/> rather than here.
@@ -66,8 +59,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public bool HasAuthorizationMetadata { get; }
 
         /// <summary>
-        /// Whether the action's own metadata demands authorization. Honours
-        /// <see cref="RequiresAuthorizationOverride"/> when the tool declared one.
+        /// Whether the action's own metadata demands authorization.
         /// </summary>
         /// <remarks>
         /// Reads the action in isolation, so it stays <c>false</c> for an action that carries nothing and

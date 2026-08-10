@@ -148,12 +148,10 @@ curl -X POST http://localhost:5000/mcp \
 | `[McpIgnore]` | controller, action, parameter, property | Excludes it. Always wins. |
 | `[McpParameter]` | parameter, property | Overrides the name, description, requiredness or example of one input. |
 
-`[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, `RequiresAuthorization`, and the
-four MCP behaviour hints `ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to
-the HTTP semantics of the verb - GET is read-only and idempotent, DELETE and PUT are destructive - and
-any hint you set explicitly overrides that default. `RequiresAuthorization` overrides what Nabu infers
-about the action's authorization when it tailors the tool list to the caller - see
-[Advertising tools per caller](#advertising-tools-per-caller).
+`[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, and the four MCP behaviour hints
+`ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to the HTTP semantics of the
+verb - GET is read-only and idempotent, DELETE and PUT are destructive - and any hint you set
+explicitly overrides that default.
 
 ```csharp
 [HttpPost("{id:guid}/publish")]
@@ -338,19 +336,34 @@ The resolved policy is then evaluated against the caller with the application's 
 shown only the tools that need no authorization; the rest appear when it lists the tools again with
 credentials.
 
+Nothing MCP-specific is involved: the attributes that already secure the API are the ones that decide,
+so an action opts out of its controller's `[Authorize]` the same way it always has.
+
+```csharp
+[ApiController]
+[Route("api/todos")]
+[Authorize]                                 // the controller is protected...
+public class TodosController : ControllerBase
+{
+    /// <summary>Lists the priority levels a todo item can be given.</summary>
+    [HttpGet("priorities")]
+    [AllowAnonymous]                        // ...and this one action is not
+    [McpTool]
+    public ActionResult<IEnumerable<string>> GetPriorities() => ...
+}
+```
+
+`todos_get_priorities` is advertised to, and callable by, a caller holding no token; every other todo
+tool waits until it signs in.
+
 This decides what is *advertised*, never what is allowed. A hidden tool that gets called anyway is
 still replayed through the pipeline and still refused by the action, so filtering can never be the only
 thing standing between a caller and an endpoint. When the requirement cannot be worked out - a custom
 filter Nabu cannot see, a missing authorization service - the tool stays visible, because a spurious 403
-is a better failure than a capability that silently disappeared. Two escape hatches exist for the cases
-Nabu reads wrongly:
+is a better failure than a capability that silently disappeared. When authorization depends on something
+no attribute expresses, take the decision over entirely:
 
 ```csharp
-[McpTool(RequiresAuthorization = true)]     // treat as protected regardless of what the metadata says
-```
-
-```csharp
-// or take the decision over entirely
 services.AddSingleton<IMcpToolAuthorizationEvaluator, MyEvaluator>();
 ```
 
@@ -467,11 +480,12 @@ The sample is a working API with JWT bearer authentication, a role-based policy,
 XML documentation. Two accounts exist, both with the password `password`: `alice` (user) and `root`
 (user + admin).
 
-It is wired up for per-caller tool visibility, so the two attributes are visible at work: connect
-without a token and `tools/list` returns only the `weather_*` tools, because `WeatherController` carries
-`[AllowAnonymous]` - and they can be called. The `todos_*` tools are neither advertised nor callable
-until you sign in, because `TodosController` carries `[Authorize]`, and `todos_delete` appears only for
-`root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
+It is wired up for per-caller tool visibility, so the ordinary authorization attributes are visible at
+work. Connect without a token and `tools/list` returns the `weather_*` tools, because
+`WeatherController` carries `[AllowAnonymous]`, plus `todos_get_priorities`, because that one action
+carries `[AllowAnonymous]` even though its controller carries `[Authorize]` - and all of them can be
+called. The rest of the `todos_*` tools are neither advertised nor callable until you sign in, and
+`todos_delete` appears only for `root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
 
 ```bash
 dotnet run --project samples/Nabu.Sample.TodoApi

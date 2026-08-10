@@ -95,12 +95,6 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         [HttpGet("admin")]
         [Authorize(Policy = "AdminOnly")]
         public IActionResult Admin() => Ok(new { ok = true });
-
-        /// <summary>Anonymous to the pipeline, but declared protected for the purposes of MCP.</summary>
-        [HttpGet("pinned")]
-        [AllowAnonymous]
-        [McpTool("visibility_pinned", RequiresAuthorization = true)]
-        public IActionResult Pinned() => Ok(new { ok = true });
     }
 
     /// <summary>
@@ -272,7 +266,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             using var server = CreateServer(options => { });
 
             Assert.Equal(
-                new[] { "visibility_admin", "visibility_open", "visibility_pinned", "visibility_secure" },
+                new[] { "visibility_admin", "visibility_open", "visibility_secure" },
                 await ToolNamesAsync(server));
         }
 
@@ -292,11 +286,11 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             Assert.Equal(new[] { "visibility_open" }, await ToolNamesAsync(server));
 
             Assert.Equal(
-                new[] { "visibility_open", "visibility_pinned", "visibility_secure" },
+                new[] { "visibility_open", "visibility_secure" },
                 await ToolNamesAsync(server, Alice));
 
             Assert.Equal(
-                new[] { "visibility_admin", "visibility_open", "visibility_pinned", "visibility_secure" },
+                new[] { "visibility_admin", "visibility_open", "visibility_secure" },
                 await ToolNamesAsync(server, Root));
         }
 
@@ -309,15 +303,6 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
             // alice cannot call the admin tool, but she is signed in, which is all this mode asks.
             Assert.Contains("visibility_admin", await ToolNamesAsync(server, Alice));
-        }
-
-        [Fact]
-        public async Task A_tool_can_declare_that_it_needs_authorization_even_when_the_action_does_not()
-        {
-            using var server = CreateServer(options => options.ToolVisibility = McpToolVisibility.Authorized);
-
-            Assert.DoesNotContain("visibility_pinned", await ToolNamesAsync(server));
-            Assert.Contains("visibility_pinned", await ToolNamesAsync(server, Alice));
         }
 
         [Fact]
@@ -375,7 +360,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
             Assert.Equal(HttpStatusCode.Unauthorized, call.StatusCode);
 
             Assert.Equal(
-                new[] { "visibility_admin", "visibility_open", "visibility_pinned", "visibility_secure" },
+                new[] { "visibility_admin", "visibility_open", "visibility_secure" },
                 await ToolNamesAsync(server, Root));
         }
 
@@ -398,12 +383,6 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                 "tools/call",
                 new JsonObject { ["name"] = "visibility_secure", ["arguments"] = new JsonObject() });
             Assert.Equal(HttpStatusCode.Unauthorized, secure.StatusCode);
-
-            using var pinned = await PostAsync(
-                server,
-                "tools/call",
-                new JsonObject { ["name"] = "visibility_pinned", ["arguments"] = new JsonObject() });
-            Assert.Equal(HttpStatusCode.Unauthorized, pinned.StatusCode);
 
             var authorized = await CallAsync(server, "visibility_secure", Alice);
             Assert.False(authorized["result"]!["isError"]!.GetValue<bool>());
@@ -499,10 +478,6 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
             Assert.True(tools["visibility_secure"].Authorization.RequiresAuthorization);
             Assert.NotEmpty(tools["visibility_admin"].Authorization.AuthorizeData);
-
-            // [AllowAnonymous] on the action, overridden by the tool itself.
-            Assert.True(tools["visibility_pinned"].Authorization.AllowsAnonymous);
-            Assert.True(tools["visibility_pinned"].Authorization.RequiresAuthorization);
         }
     }
 }

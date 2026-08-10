@@ -259,7 +259,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     Description = ResolveDescription(action, methodAttribute, controllerAttribute, httpMethod, routeTemplate),
                     ConstantRouteValues = new Dictionary<string, string?>(action.RouteValues, StringComparer.OrdinalIgnoreCase),
                     Constants = constants,
-                    Authorization = ResolveAuthorization(action, attribute, controllerAttribute),
+                    Authorization = ResolveAuthorization(action),
                 });
             }
 
@@ -275,10 +275,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         /// controller, and the action's filter descriptors - which is where globally registered
         /// authorization filters show up. As in MVC, an <c>[AllowAnonymous]</c> anywhere in that set wins.
         /// </remarks>
-        private static McpToolAuthorization ResolveAuthorization(
-            ControllerActionDescriptor action,
-            McpToolAttribute? attribute,
-            McpToolAttribute? controllerAttribute)
+        private static McpToolAuthorization ResolveAuthorization(ControllerActionDescriptor action)
         {
             var allowAnonymous = false;
             var authorizeData = new List<IAuthorizeData>();
@@ -320,9 +317,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 }
             }
 
-            var requiresOverride = attribute?.RequiresAuthorizationOverride ?? controllerAttribute?.RequiresAuthorizationOverride;
-
-            return new McpToolAuthorization(allowAnonymous, authorizeData, policies, requiresOverride);
+            return new McpToolAuthorization(allowAnonymous, authorizeData, policies);
         }
 
         private static void CollectAuthorization(object[] attributes, ref bool allowAnonymous, List<IAuthorizeData> authorizeData)

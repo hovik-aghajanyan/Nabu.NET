@@ -31,12 +31,16 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         [Fact]
         public async Task An_anonymous_caller_is_shown_only_the_actions_marked_AllowAnonymous()
         {
-            // WeatherController carries [AllowAnonymous]; TodosController carries [Authorize].
             var names = await ToolNamesAsync();
 
+            // WeatherController carries [AllowAnonymous] on the controller...
             Assert.Contains("weather_get_cities", names);
             Assert.Contains("weather_get_forecast", names);
-            Assert.All(names, name => Assert.StartsWith("weather_", name));
+
+            // ...and TodosController carries [Authorize], with one action opting back out.
+            Assert.Contains("todos_get_priorities", names);
+            Assert.DoesNotContain("todos_list", names);
+            Assert.DoesNotContain("todos_create", names);
         }
 
         [Fact]
@@ -46,6 +50,17 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
             Assert.False(McpTestFixture.IsError(result));
             Assert.Contains("Yerevan", McpTestFixture.TextOf(result));
+        }
+
+        [Fact]
+        public async Task AllowAnonymous_on_an_action_beats_Authorize_on_its_controller()
+        {
+            // The whole controller is [Authorize]; this one action is [AllowAnonymous], and that is
+            // enough to make it both advertised to and callable by a caller with no token at all.
+            var result = await _fixture.CallToolAsync("todos_get_priorities", new JsonObject());
+
+            Assert.False(McpTestFixture.IsError(result));
+            Assert.Contains("Critical", McpTestFixture.TextOf(result));
         }
 
         [Fact]
