@@ -212,6 +212,10 @@ namespace Nabu.Mcp.AspNetCore.Execution
             features.Set<IHttpResponseFeature>(responseFeature);
 #if !NETSTANDARD2_0
             features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(responseBody));
+
+            // Minimal API body binding asks this feature whether a body exists at all before reading
+            // the stream, and treats an absent feature as "no body". MVC never consults it.
+            features.Set<IHttpRequestBodyDetectionFeature>(new RequestBodyDetectionFeature(bodyBytes != null && bodyBytes.Length > 0));
 #endif
 
             features.Set<IHttpRequestLifetimeFeature>(new HttpRequestLifetimeFeature
@@ -276,6 +280,18 @@ namespace Nabu.Mcp.AspNetCore.Execution
 
             return false;
         }
+
+#if !NETSTANDARD2_0
+        private sealed class RequestBodyDetectionFeature : IHttpRequestBodyDetectionFeature
+        {
+            public RequestBodyDetectionFeature(bool canHaveBody)
+            {
+                CanHaveBody = canHaveBody;
+            }
+
+            public bool CanHaveBody { get; }
+        }
+#endif
 
         private McpToolInvocationResult ReadResult(HttpContext context, CappedResponseStream responseBody, string requestUri)
         {

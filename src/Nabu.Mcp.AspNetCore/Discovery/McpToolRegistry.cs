@@ -24,10 +24,11 @@ using Nabu.Mcp.AspNetCore.Schema;
 namespace Nabu.Mcp.AspNetCore.Discovery
 {
     /// <summary>
-    /// Discovers MCP tools from the MVC action table. The result is cached and rebuilt automatically
-    /// whenever the action descriptor collection changes (for example when application parts are added).
+    /// Discovers MCP tools from the MVC action table and - on modern frameworks - from Minimal API
+    /// route handlers. The result is cached and rebuilt automatically whenever the action descriptor
+    /// collection or the endpoint data source changes (for example when application parts are added).
     /// </summary>
-    public class McpToolRegistry : IMcpToolRegistry
+    public partial class McpToolRegistry : IMcpToolRegistry
     {
         private static readonly Type[] IgnoredParameterTypes =
         {
@@ -46,25 +47,29 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             "Microsoft.AspNetCore.Http.IFormCollection",
         };
 
-        private readonly IActionDescriptorCollectionProvider _actionProvider;
+        private readonly IActionDescriptorCollectionProvider? _actionProvider;
         private readonly NabuMcpOptions _options;
         private readonly JsonSchemaGenerator _schemaGenerator;
         private readonly IXmlDocumentationProvider _documentation;
         private readonly ILogger _logger;
 
         private readonly object _sync = new object();
-        private int _cachedVersion = -1;
+        private long _cachedVersion = -1;
         private IReadOnlyList<McpToolDescriptor>? _tools;
         private IReadOnlyDictionary<string, McpToolDescriptor>? _byName;
 
+        /// <remarks>
+        /// <paramref name="actionProvider"/> may be <c>null</c> in an application that hosts no
+        /// controllers, in which case only Minimal API endpoints are discovered.
+        /// </remarks>
         public McpToolRegistry(
-            IActionDescriptorCollectionProvider actionProvider,
+            IActionDescriptorCollectionProvider? actionProvider,
             IOptions<NabuMcpOptions> options,
             JsonSchemaGenerator schemaGenerator,
             IXmlDocumentationProvider documentation,
             ILogger<McpToolRegistry>? logger = null)
         {
-            _actionProvider = actionProvider ?? throw new ArgumentNullException(nameof(actionProvider));
+            _actionProvider = actionProvider;
             _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
             _schemaGenerator = schemaGenerator ?? throw new ArgumentNullException(nameof(schemaGenerator));
             _documentation = documentation ?? NullXmlDocumentationProvider.Instance;
@@ -89,23 +94,40 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             return _byName!.TryGetValue(name, out tool) && tool != null;
         }
 
+        /// <summary>
+        /// A single number that changes whenever either discovery source changes: the MVC action table
+        /// version in the upper half, the endpoint change counter in the lower half.
+        /// </summary>
+        private long CurrentVersion()
+        {
+            long version = _actionProvider != null ? _actionProvider.ActionDescriptors.Version : 0;
+            version <<= 32;
+#if !NETSTANDARD2_0
+            version |= (uint)Volatile.Read(ref _endpointVersion);
+#endif
+            return version;
+        }
+
         private void EnsureBuilt()
         {
-            var collection = _actionProvider.ActionDescriptors;
-            if (_tools != null && _cachedVersion == collection.Version)
+            if (_tools != null && _cachedVersion == CurrentVersion())
             {
                 return;
             }
 
             lock (_sync)
             {
-                collection = _actionProvider.ActionDescriptors;
-                if (_tools != null && _cachedVersion == collection.Version)
+                var version = CurrentVersion();
+                if (_tools != null && _cachedVersion == version)
                 {
                     return;
                 }
 
-                var tools = Build(collection.Items);
+                var actions = _actionProvider?.ActionDescriptors.Items
+                              ?? (IReadOnlyList<Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor>)
+                                  new Microsoft.AspNetCore.Mvc.Abstractions.ActionDescriptor[0];
+
+                var tools = Build(actions);
                 var byName = new Dictionary<string, McpToolDescriptor>(StringComparer.Ordinal);
                 foreach (var tool in tools)
                 {
@@ -114,7 +136,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
 
                 _tools = tools;
                 _byName = byName;
-                _cachedVersion = collection.Version;
+                _cachedVersion = version;
 
                 _logger.LogInformation("Nabu MCP discovered {ToolCount} tool(s).", tools.Count);
             }
@@ -157,6 +179,10 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     results.Add(tool);
                 }
             }
+
+#if !NETSTANDARD2_0
+            BuildEndpointTools(results, used);
+#endif
 
             results.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
             return results;
@@ -216,6 +242,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     action.ActionName);
             }
 
+            var display = action.ControllerName + "." + action.ActionName;
             var httpMethod = ResolveHttpMethod(action);
             var routeTemplate = ResolveRouteTemplate(action);
             if (routeTemplate == null)
@@ -244,14 +271,14 @@ namespace Nabu.Mcp.AspNetCore.Discovery
 
                 List<McpToolParameterDescriptor> parameters;
                 List<McpToolConstantDescriptor> constants;
-                if (!TryApplyVariant(action, attribute, routeTemplate, allParameters, out parameters, out constants))
+                if (!TryApplyVariant(display, attribute, routeTemplate, allParameters, out parameters, out constants))
                 {
                     continue;
                 }
 
                 var methodAttribute = isMethodLevel ? attribute : null;
                 var inputSchema = BuildInputSchema(parameters);
-                var annotations = BuildAnnotations(attribute, methodAttribute, httpMethod, action);
+                var annotations = BuildAnnotations(attribute, methodAttribute, httpMethod, Humanize(action.ActionName));
                 var name = ResolveName(action, methodAttribute, httpMethod, routeTemplate, usedNames);
 
                 results.Add(new McpToolDescriptor(name, httpMethod, routeTemplate, action, parameters, inputSchema, annotations)
@@ -340,7 +367,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         /// Returns <c>false</c> when the variant cannot produce a callable tool.
         /// </summary>
         private bool TryApplyVariant(
-            ControllerActionDescriptor action,
+            string display,
             McpToolAttribute? attribute,
             string routeTemplate,
             IReadOnlyList<McpToolParameterDescriptor> allParameters,
@@ -360,9 +387,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             var exclude = BuildNameSet(attribute.ExcludeParameters);
             var required = BuildNameSet(attribute.RequiredParameters);
             var optional = BuildNameSet(attribute.OptionalParameters);
-            var pinned = BuildConstantMap(attribute, action);
+            var pinned = BuildConstantMap(attribute, display);
 
-            WarnAboutUnknownNames(action, allParameters, include, exclude, required, optional, pinned?.Keys);
+            WarnAboutUnknownNames(display, allParameters, include, exclude, required, optional, pinned?.Keys);
 
             foreach (var parameter in allParameters)
             {
@@ -378,10 +405,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     if (value == null && isRequiredRouteToken)
                     {
                         _logger.LogWarning(
-                            "Nabu MCP skipped a [McpTool] variant on {Controller}.{Action}: route parameter '{Parameter}' " +
+                            "Nabu MCP skipped a [McpTool] variant on {Endpoint}: route parameter '{Parameter}' " +
                             "was pinned to an empty value but '{Template}' cannot be built without it.",
-                            action.ControllerName,
-                            action.ActionName,
+                            display,
                             parameter.Name,
                             routeTemplate);
                         return false;
@@ -408,10 +434,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     if (isRequiredRouteToken)
                     {
                         _logger.LogWarning(
-                            "Nabu MCP skipped a [McpTool] variant on {Controller}.{Action}: route parameter '{Parameter}' " +
+                            "Nabu MCP skipped a [McpTool] variant on {Endpoint}: route parameter '{Parameter}' " +
                             "was hidden but '{Template}' cannot be built without it. Pin it with ConstantParameters instead.",
-                            action.ControllerName,
-                            action.ActionName,
+                            display,
                             parameter.Name,
                             routeTemplate);
                         return false;
@@ -470,7 +495,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             return set.Count == 0 ? null : set;
         }
 
-        private IDictionary<string, string>? BuildConstantMap(McpToolAttribute attribute, ControllerActionDescriptor action)
+        private IDictionary<string, string>? BuildConstantMap(McpToolAttribute attribute, string display)
         {
             var entries = attribute.ConstantParameters;
             if (entries == null || entries.Length == 0)
@@ -486,10 +511,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 if (!McpConstantValue.TrySplit(entry, out name, out value))
                 {
                     _logger.LogWarning(
-                        "Nabu MCP ignored the ConstantParameters entry '{Entry}' on {Controller}.{Action}: expected 'name=value'.",
+                        "Nabu MCP ignored the ConstantParameters entry '{Entry}' on {Endpoint}: expected 'name=value'.",
                         entry,
-                        action.ControllerName,
-                        action.ActionName);
+                        display);
                     continue;
                 }
 
@@ -524,7 +548,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         /// the full parameter set - so every configured name that matches nothing is reported.
         /// </summary>
         private void WarnAboutUnknownNames(
-            ControllerActionDescriptor action,
+            string display,
             IReadOnlyList<McpToolParameterDescriptor> allParameters,
             params IEnumerable<string>?[] configuredNames)
         {
@@ -547,10 +571,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     if (!known.Contains(name))
                     {
                         _logger.LogWarning(
-                            "Nabu MCP ignored '{Name}' in an [McpTool] variant on {Controller}.{Action}: the action has no such input.",
+                            "Nabu MCP ignored '{Name}' in an [McpTool] variant on {Endpoint}: the endpoint has no such input.",
                             name,
-                            action.ControllerName,
-                            action.ActionName);
+                            display);
                     }
                 }
             }
@@ -570,7 +593,16 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 name = _options.ToolNameFactory(context);
             }
 
-            name = Sanitize(name!);
+            return ReserveName(name!, usedNames, action.ControllerName + "." + action.ActionName);
+        }
+
+        /// <summary>
+        /// Sanitizes a tool name and claims it in <paramref name="usedNames"/>, appending a numeric
+        /// suffix when overloads map to the same generated name.
+        /// </summary>
+        private string ReserveName(string name, ISet<string> usedNames, string display)
+        {
+            name = Sanitize(name);
             if (name.Length == 0)
             {
                 name = "tool";
@@ -581,7 +613,6 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 return name;
             }
 
-            // Overloaded actions map to the same generated name; disambiguate deterministically.
             var suffix = 2;
             string candidate;
             do
@@ -592,10 +623,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             while (!usedNames.Add(candidate));
 
             _logger.LogWarning(
-                "Nabu MCP tool name '{Name}' was already taken; {Controller}.{Action} is exposed as '{Candidate}'.",
+                "Nabu MCP tool name '{Name}' was already taken; {Endpoint} is exposed as '{Candidate}'.",
                 name,
-                action.ControllerName,
-                action.ActionName,
+                display,
                 candidate);
 
             return candidate;
@@ -650,12 +680,12 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             McpToolAttribute? attribute,
             McpToolAttribute? methodAttribute,
             string httpMethod,
-            ControllerActionDescriptor action)
+            string fallbackTitle)
         {
             var isRead = httpMethod == "GET" || httpMethod == "HEAD" || httpMethod == "OPTIONS";
             var annotations = new McpToolAnnotations
             {
-                Title = methodAttribute?.Title ?? attribute?.Title ?? Humanize(action.ActionName),
+                Title = methodAttribute?.Title ?? attribute?.Title ?? fallbackTitle,
                 ReadOnly = isRead,
                 Destructive = httpMethod == "DELETE" || httpMethod == "PUT",
                 Idempotent = isRead || httpMethod == "PUT" || httpMethod == "DELETE",
@@ -845,7 +875,17 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 }
 
                 var resolved = ResolveSource(source, parameter, parameterInfo, httpMethod, routeTemplate);
-                AddParameter(action, parameter, parameterInfo, resolved, routeTemplate, parameters, seen);
+                var bindingName = parameter.BindingInfo?.BinderModelName ?? parameter.Name;
+                AddParameter(
+                    action.MethodInfo,
+                    parameter.Name,
+                    bindingName,
+                    parameter.ParameterType,
+                    parameterInfo,
+                    resolved,
+                    routeTemplate,
+                    parameters,
+                    seen);
             }
 
             return true;
@@ -897,21 +937,24 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         }
 
         private void AddParameter(
-            ControllerActionDescriptor action,
-            Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter,
+            MethodBase? documentationMethod,
+            string parameterName,
+            string bindingName,
+            Type type,
             ParameterInfo? parameterInfo,
             McpParameterSource source,
             string routeTemplate,
             List<McpToolParameterDescriptor> parameters,
-            ISet<string> seen)
+            ISet<string> seen,
+            bool valueTypesDefaultToOptional = true)
         {
-            var bindingName = parameter.BindingInfo?.BinderModelName ?? parameter.Name;
             var attributes = parameterInfo?.GetCustomAttributes().ToList() ?? new List<Attribute>();
             var mcpAttribute = parameterInfo?.GetCustomAttribute<McpParameterAttribute>();
-            var type = parameter.ParameterType;
 
             var description = JsonSchemaGenerator.ReadDescription(attributes)
-                              ?? _documentation.GetParameterDescription(action.MethodInfo, parameter.Name);
+                              ?? (documentationMethod != null
+                                  ? _documentation.GetParameterDescription(documentationMethod, parameterName)
+                                  : null);
 
             var isComplex = JsonSchemaGenerator.IsComplexObject(type);
             var shouldFlatten = isComplex &&
@@ -946,7 +989,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             // documents. A header name such as "X-Tenant" makes a poor tool argument, so header
             // parameters are advertised under their CLR parameter name instead.
             var schemaName = mcpAttribute?.Name ?? JsonNamingPolicy.CamelCase.ConvertName(
-                source == McpParameterSource.Header ? parameter.Name : bindingName);
+                source == McpParameterSource.Header ? parameterName : bindingName);
             schemaName = Deduplicate(schemaName, seen);
 
             var nullable = parameterInfo != null ? NullabilityHelper.IsNullable(parameterInfo) : null;
@@ -957,7 +1000,8 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 schema["description"] = description;
             }
 
-            var isRequired = ResolveRequired(parameter, parameterInfo, attributes, mcpAttribute, source, routeTemplate, bindingName, nullable);
+            var isRequired = ResolveRequired(
+                type, parameterInfo, attributes, mcpAttribute, source, routeTemplate, bindingName, nullable, valueTypesDefaultToOptional);
 
             parameters.Add(new McpToolParameterDescriptor(schemaName, bindingName, source, type, isRequired, schema)
             {
@@ -985,15 +1029,22 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             return candidate;
         }
 
+        /// <remarks>
+        /// <paramref name="valueTypesDefaultToOptional"/> encodes a real difference between the two
+        /// binding stacks: MVC model binding gives a missing non-nullable value type its default value,
+        /// while Minimal APIs answer 400 - so the same <c>int page</c> parameter is optional on a
+        /// controller and required on a route handler.
+        /// </remarks>
         private static bool ResolveRequired(
-            Microsoft.AspNetCore.Mvc.Abstractions.ParameterDescriptor parameter,
+            Type parameterType,
             ParameterInfo? parameterInfo,
             IList<Attribute> attributes,
             McpParameterAttribute? mcpAttribute,
             McpParameterSource source,
             string routeTemplate,
             string bindingName,
-            bool? nullable)
+            bool? nullable,
+            bool valueTypesDefaultToOptional)
         {
             if (mcpAttribute?.RequiredOverride != null)
             {
@@ -1020,10 +1071,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 return nullable != true;
             }
 
-            var type = parameter.ParameterType;
-            if (type.IsValueType && Nullable.GetUnderlyingType(type) == null)
+            if (parameterType.IsValueType && Nullable.GetUnderlyingType(parameterType) == null)
             {
-                return false;
+                return !valueTypesDefaultToOptional;
             }
 
             return nullable == false;
