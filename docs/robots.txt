@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hovik-aghajanyan.github.io/nabu.net/sitemap.xml

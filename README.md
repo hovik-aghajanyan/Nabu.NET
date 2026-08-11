@@ -3,8 +3,11 @@
 [![CI](https://github.com/hovik-aghajanyan/nabu.net/actions/workflows/ci.yml/badge.svg)](https://github.com/hovik-aghajanyan/nabu.net/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Nabu.Mcp.AspNetCore.svg)](https://www.nuget.org/packages/Nabu.Mcp.AspNetCore)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-hovik--aghajanyan.github.io%2Fnabu.net-0b5cad.svg)](https://hovik-aghajanyan.github.io/nabu.net/)
 
 **Turn the ASP.NET Core Web API you already have into an MCP server - without rewriting your API.**
+
+📚 **Documentation:** [hovik-aghajanyan.github.io/nabu.net](https://hovik-aghajanyan.github.io/nabu.net/)
 
 One attribute. Same endpoint. Same authorization. Same validation. Same middleware.
 
