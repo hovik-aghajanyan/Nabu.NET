@@ -39,6 +39,25 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         [HttpGet("hidden")]
         [McpIgnore]
         public IActionResult Hidden() => Ok(new { hidden = true });
+
+        /// <summary>Produces a response body of the requested size.</summary>
+        [HttpGet("big")]
+        public IActionResult Big([FromQuery] int bytes) => Content(new string('x', bytes), "text/plain");
+
+        /// <summary>Reports the Authorization header the action received.</summary>
+        [HttpGet("auth-echo")]
+        public IActionResult AuthEcho([FromHeader(Name = "Authorization")] string? authorization) => Ok(new { authorization });
+    }
+
+    /// <summary>Controller used only by the protected-header constant tests.</summary>
+    [ApiController]
+    [Route("pinned")]
+    public class PinnedHeaderController : ControllerBase
+    {
+        /// <summary>Reports the Authorization header the action received.</summary>
+        [HttpGet("auth")]
+        [McpTool("pinned_auth", ConstantParameters = new[] { "authorization=Bearer pinned" })]
+        public IActionResult Auth([FromHeader(Name = "Authorization")] string? authorization) => Ok(new { authorization });
     }
 
     public class StandaloneAppTests
@@ -50,6 +69,11 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         /// </summary>
         private static IHost CreateServer(Action<NabuMcpOptions> configure)
         {
+            return CreateServer(configure, typeof(ProbeController));
+        }
+
+        private static IHost CreateServer(Action<NabuMcpOptions> configure, params Type[] controllers)
+        {
             var host = new HostBuilder()
                 .ConfigureWebHost(webHost => webHost
                     .UseTestServer()
@@ -58,7 +82,7 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
                         services
                             .AddControllers()
                             .AddApplicationPart(typeof(ProbeController).Assembly)
-                            .OnlyControllers(typeof(ProbeController));
+                            .OnlyControllers(controllers);
 
                         services.AddNabuMcp(configure);
                     })
@@ -252,6 +276,120 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
 
             var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
             Assert.Equal("acme", JsonNode.Parse(text)!["tenant"]!.GetValue<string>());
+        }
+
+        [Fact]
+        public async Task A_model_supplied_authorization_header_is_dropped_by_default()
+        {
+            using var server = CreateServer(options =>
+            {
+                options.ExposeAllActions = true;
+                options.ExposeHeaderParameters = true;
+            });
+
+            var result = await RpcAsync(
+                server,
+                "tools/call",
+                new JsonObject
+                {
+                    ["name"] = "probe_auth_echo",
+                    ["arguments"] = new JsonObject { ["authorization"] = "Bearer forged-by-the-model" },
+                });
+
+            var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+
+            // The argument never reached the action; the (absent) caller credential stayed in place.
+            Assert.Null(JsonNode.Parse(text)!["authorization"]?.GetValue<string?>());
+        }
+
+        [Fact]
+        public async Task Removing_a_header_from_ProtectedHeaders_is_the_explicit_opt_in()
+        {
+            using var server = CreateServer(options =>
+            {
+                options.ExposeAllActions = true;
+                options.ExposeHeaderParameters = true;
+                options.ProtectedHeaders.Remove("Authorization");
+            });
+
+            var result = await RpcAsync(
+                server,
+                "tools/call",
+                new JsonObject
+                {
+                    ["name"] = "probe_auth_echo",
+                    ["arguments"] = new JsonObject { ["authorization"] = "Bearer allowed" },
+                });
+
+            var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+            Assert.Equal("Bearer allowed", JsonNode.Parse(text)!["authorization"]!.GetValue<string>());
+        }
+
+        [Fact]
+        public async Task A_developer_pinned_constant_may_set_a_protected_header()
+        {
+            using var server = CreateServer(
+                options => options.ExposeHeaderParameters = true,
+                typeof(PinnedHeaderController));
+
+            var result = await RpcAsync(
+                server,
+                "tools/call",
+                new JsonObject { ["name"] = "pinned_auth", ["arguments"] = new JsonObject() });
+
+            var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+
+            // The constant comes from the tool definition, not the model, so ProtectedHeaders lets it through.
+            Assert.Equal("Bearer pinned", JsonNode.Parse(text)!["authorization"]!.GetValue<string>());
+        }
+
+        [Fact]
+        public async Task Responses_beyond_MaxResponseBytes_are_truncated_and_flagged()
+        {
+            using var server = CreateServer(options =>
+            {
+                options.ExposeAllActions = true;
+                options.MaxResponseBytes = 64;
+            });
+
+            var result = await RpcAsync(
+                server,
+                "tools/call",
+                new JsonObject
+                {
+                    ["name"] = "probe_big",
+                    ["arguments"] = new JsonObject { ["bytes"] = 500_000 },
+                });
+
+            var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+
+            Assert.StartsWith(new string('x', 64), text);
+            Assert.Contains("[truncated", text);
+            Assert.True(text.Length < 200, "The tool result must carry the capped body, not the full response.");
+        }
+
+        [Fact]
+        public async Task Responses_within_MaxResponseBytes_are_not_flagged_as_truncated()
+        {
+            using var server = CreateServer(options =>
+            {
+                options.ExposeAllActions = true;
+                options.MaxResponseBytes = 64;
+            });
+
+            var result = await RpcAsync(
+                server,
+                "tools/call",
+                new JsonObject
+                {
+                    ["name"] = "probe_big",
+                    ["arguments"] = new JsonObject { ["bytes"] = 10 },
+                });
+
+            var text = result["result"]!["content"]!.AsArray()[0]!["text"]!.GetValue<string>();
+
+            Assert.Equal(new string('x', 10), text);
+            Assert.DoesNotContain("[truncated", text);
         }
 
         [Fact]

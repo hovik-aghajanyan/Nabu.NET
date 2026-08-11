@@ -159,6 +159,25 @@ namespace Nabu.Mcp.AspNetCore
         public bool ExposeHeaderParameters { get; set; }
 
         /// <summary>
+        /// Headers a model-supplied argument may never set on the synthetic request, even when
+        /// <see cref="ExposeHeaderParameters"/> is on. Credentials and proxy metadata forwarded from
+        /// the MCP caller keep their original values; a tool argument targeting one of these headers is
+        /// dropped with a warning. Constants pinned by the developer through
+        /// <see cref="McpToolAttribute.ConstantParameters"/> are not affected - they are developer
+        /// input, not model input. Remove a name to explicitly allow the model to supply it.
+        /// Matching is case insensitive.
+        /// </summary>
+        public ISet<string> ProtectedHeaders { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Authorization",
+            "Cookie",
+            "Host",
+            "X-Forwarded-For",
+            "X-Forwarded-Proto",
+            "X-Forwarded-Host",
+        };
+
+        /// <summary>
         /// Seeds the synthetic request with the <see cref="System.Security.Claims.ClaimsPrincipal"/> that
         /// was authenticated for the MCP request. Authentication middleware still runs and overwrites it
         /// when the forwarded credentials authenticate successfully; this only makes identity survive
@@ -168,8 +187,10 @@ namespace Nabu.Mcp.AspNetCore
         public bool PropagateUser { get; set; } = true;
 
         /// <summary>
-        /// Largest action response body, in bytes, turned into tool content. Larger responses are
-        /// truncated and flagged. Defaults to 1 MiB.
+        /// Largest action response body, in bytes, turned into tool content. This bounds memory as well
+        /// as output: the response is buffered into a capped stream that discards everything past the
+        /// limit as it is written, so an action that produces a huge response never occupies more than
+        /// this much response memory, and the result is flagged as truncated. Defaults to 1 MiB.
         /// </summary>
         public int MaxResponseBytes { get; set; } = 1024 * 1024;
 

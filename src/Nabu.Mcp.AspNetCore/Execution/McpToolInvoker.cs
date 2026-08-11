@@ -102,7 +102,7 @@ namespace Nabu.Mcp.AspNetCore.Execution
 
             using (var scope = _scopeFactory.CreateScope())
             using (var requestBody = bodyBytes == null ? Stream.Null : new MemoryStream(bodyBytes, writable: false))
-            using (var responseBody = new MemoryStream())
+            using (var responseBody = new CappedResponseStream(_options.MaxResponseBytes))
             {
                 var features = BuildFeatures(tool, originalContext, bound, bodyBytes, requestBody, responseBody, scope, cancellationToken);
 
@@ -170,6 +170,18 @@ namespace Nabu.Mcp.AspNetCore.Execution
 
             foreach (var header in bound.Headers)
             {
+                // A model-supplied argument may never override credentials or proxy metadata; the value
+                // forwarded from the MCP caller stays in place. Developer-pinned constants are exempt.
+                if (_options.ProtectedHeaders.Contains(header.Key) && !bound.ConstantHeaders.Contains(header.Key))
+                {
+                    _logger.LogWarning(
+                        "Nabu MCP dropped a model-supplied value for protected header {Header} on tool {Tool}. " +
+                        "Remove the header from NabuMcpOptions.ProtectedHeaders to allow it.",
+                        header.Key,
+                        tool.Name);
+                    continue;
+                }
+
                 headers[header.Key] = header.Value;
             }
 
@@ -265,20 +277,12 @@ namespace Nabu.Mcp.AspNetCore.Execution
             return false;
         }
 
-        private McpToolInvocationResult ReadResult(HttpContext context, MemoryStream responseBody, string requestUri)
+        private McpToolInvocationResult ReadResult(HttpContext context, CappedResponseStream responseBody, string requestUri)
         {
-            var buffer = responseBody.ToArray();
-            var truncated = false;
-
-            if (buffer.Length > _options.MaxResponseBytes)
-            {
-                truncated = true;
-                var trimmed = new byte[_options.MaxResponseBytes];
-                Array.Copy(buffer, trimmed, _options.MaxResponseBytes);
-                buffer = trimmed;
-            }
-
-            var body = buffer.Length == 0 ? string.Empty : Encoding.UTF8.GetString(buffer);
+            // The stream discarded everything past MaxResponseBytes as it was written, so a huge
+            // response never occupied more memory than the cap.
+            var truncated = responseBody.Overflowed;
+            var body = responseBody.ReadBufferedText();
 
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var header in context.Response.Headers)

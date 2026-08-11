@@ -4,13 +4,18 @@
 [![NuGet](https://img.shields.io/nuget/v/Nabu.Mcp.AspNetCore.svg)](https://www.nuget.org/packages/Nabu.Mcp.AspNetCore)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Expose the ASP.NET Core Web API you already have as MCP tools by adding one attribute.**
+**Turn the ASP.NET Core Web API you already have into an MCP server - without rewriting your API.**
+
+One attribute. Same endpoint. Same authorization. Same validation. Same middleware.
 
 `Nabu.Mcp.AspNetCore` turns existing controller actions into [Model Context Protocol](https://modelcontextprotocol.io)
 tools. It does not ask you to re-declare your endpoints, duplicate validation, or re-implement your
 security model. A tool call is replayed as a real HTTP request through **your application's own
 pipeline**, so authentication, authorization policies, action filters, model binding, model validation,
-exception handlers and every other piece of middleware keep working exactly as they do today.
+exception handlers and every other piece of middleware keep working exactly as they do today. Tool
+visibility can even be evaluated with your application's own authorization policies, so `tools/list`
+shows each caller only the tools it is actually allowed to invoke - see
+[Advertising tools per caller](#advertising-tools-per-caller).
 
 ```csharp
 [HttpGet("{id:guid}")]
@@ -52,9 +57,16 @@ built `RequestDelegate` at the very front of the pipeline. To run a tool it cons
 `HttpContext` for the target route - carrying the caller's identity, forwarded credentials, a fresh DI
 scope and a JSON body built from the tool arguments - and pushes it through that captured pipeline.
 
-The action cannot tell the difference between a tool call and a request from a browser. That is the
-entire design goal, and the test suite asserts it: the same `[Authorize(Policy = "AdminOnly")]` that
-returns 403 over HTTP returns an `isError` tool result over MCP, for the same caller.
+A tool call therefore runs through the same ASP.NET Core application pipeline as a client-issued
+request and preserves standard HTTP application semantics: request and response, connection
+information, request services, cancellation and the caller's identity all behave as they do for a
+real request. The test suite asserts it: the same `[Authorize(Policy = "AdminOnly")]` that returns
+403 over HTTP returns an `isError` tool result over MCP, for the same caller.
+
+What the synthetic request carries is the HTTP *application* surface, not the server transport.
+Middleware that depends on server-level features - client certificates and other TLS features,
+HTTP/2-specific server features, WebSockets, response upgrade, raw transport access - will find them
+absent, exactly as it would behind some reverse proxies. See [Limitations](#limitations).
 
 ## Getting started
 
@@ -304,6 +316,32 @@ Identity reaches the action two ways, which reinforce each other:
 Hop-by-hop and content headers (`Content-Length`, `Transfer-Encoding`, `Accept-Encoding`, `Host`, ...)
 are never forwarded; they are rebuilt for the synthetic request.
 
+**Protected headers.** A model-supplied argument can never override the headers that carry
+credentials or proxy metadata. Even with `ExposeHeaderParameters` on, a tool argument that binds to a
+header in `ProtectedHeaders` - by default `Authorization`, `Cookie`, `Host`, `X-Forwarded-For`,
+`X-Forwarded-Proto` and `X-Forwarded-Host` - is dropped with a warning, and the value forwarded from
+the MCP caller stays in place. Constants pinned by the developer through `ConstantParameters` are
+exempt, because they are developer input rather than model input. Removing a name from the set is the
+explicit opt-in:
+
+```csharp
+options.ProtectedHeaders.Remove("Authorization");   // only if you really mean it
+```
+
+### Recommended production configuration
+
+The defaults are tuned for a first run: the MCP endpoint is anonymous and every discovered tool is
+advertised, while each invocation is still authorized by the application pipeline. That is never an
+authorization bypass - a caller can at most see the names and schemas of tools it cannot invoke - but
+for production deployments, lock the endpoint down and tailor the catalogue to the caller:
+
+```csharp
+options.RequireAuthorization = true;                    // the endpoint itself challenges anonymous callers
+options.ToolVisibility = McpToolVisibility.Authorized;  // advertise only what the caller may actually invoke
+```
+
+The sections below describe both knobs in detail.
+
 ### Advertising tools per caller
 
 By default every discovered tool is advertised to everyone, and a caller that invokes one it is not
@@ -428,8 +466,9 @@ All options live on `NabuMcpOptions`:
 | `FlattenBodyParameter` | `true` | Lift `[FromBody]` model properties to the top level. |
 | `ExposeHeaderParameters` | `false` | Publish `[FromHeader]` parameters as tool inputs. |
 | `ForwardedHeaders`, `ForwardedHeaderPrefixes` | credentials + tracing | Headers copied onto tool requests. |
+| `ProtectedHeaders` | credentials + proxy metadata | Headers a model-supplied argument may never override. |
 | `PropagateUser` | `true` | Seed the caller's principal onto the synthetic request. |
-| `MaxResponseBytes` | 1 MiB | Response bodies above this are truncated and flagged. |
+| `MaxResponseBytes` | 1 MiB | Cap on the buffered response body; bounds memory, larger bodies are truncated and flagged. |
 | `IncludeStructuredContent` | `true` | Emit JSON responses as MCP `structuredContent`. |
 | `TreatErrorStatusAsToolError` | `true` | Map HTTP >= 400 to `isError: true`. |
 | `MaxSchemaDepth` | `8` | Nesting limit for generated schemas. |
@@ -509,10 +548,10 @@ layers.
 
 ## Target frameworks
 
-The library multi-targets `netstandard2.0`, `net6.0` and `net8.0`:
+The library multi-targets `netstandard2.0`, `net8.0` and `net10.0`:
 
 - **netstandard2.0** builds against the ASP.NET Core 2.x packages, so ASP.NET Core 2.1/2.2 apps can use it.
-- **net6.0** and **net8.0** bind to the shared framework, so modern apps pull in no legacy assemblies.
+- **net8.0** and **net10.0** bind to the shared framework, so modern apps pull in no legacy assemblies.
 
 Version-specific APIs are handled at runtime rather than by feature-flagging behaviour: the HTTP verb
 is read through `IActionHttpMethodProvider`, which has been stable since 1.0, and the enum
@@ -583,8 +622,8 @@ The demo tokens live for 24 hours; `docker compose up` again regenerates them.
 ## Building and testing
 
 ```bash
-dotnet build          # netstandard2.0 + net6.0 + net8.0
-dotnet test           # 200 tests
+dotnet build          # netstandard2.0 + net8.0 + net10.0
+dotnet test           # 230 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
@@ -622,6 +661,12 @@ The workflow can also be started manually from the Actions tab with an explicit 
 
 ## Limitations
 
+- The synthetic request reproduces the HTTP application surface, not the server transport. Standard
+  request/response semantics, connection information, request services, cancellation and identity are
+  all present, but server-level features are not: TLS and client-certificate features, HTTP/2-specific
+  server features, WebSockets, response upgrade, raw transport access and some IIS/Kestrel-specific
+  features do not exist on a replayed request. Middleware that requires them will behave as it does
+  when those features are absent.
 - Actions binding `IFormFile` or form data are skipped, with a warning; tools cannot supply files.
 - Attribute routing is what discovery is built around. Conventionally routed actions fall back to a
   `{controller}/{action}` path with the remaining arguments in the query string.
