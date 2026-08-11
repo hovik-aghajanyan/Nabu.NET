@@ -20,6 +20,12 @@ namespace Nabu.Mcp.AspNetCore.Execution
             public JsonNode? Body { get; set; }
 
             public IDictionary<string, string> Headers { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>
+            /// Header names whose values were pinned by the tool definition rather than supplied by the
+            /// model, so <see cref="NabuMcpOptions.ProtectedHeaders"/> does not apply to them.
+            /// </summary>
+            public ISet<string> ConstantHeaders { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
         public static BoundRequest Bind(McpToolDescriptor tool, JsonObject? arguments, Schema.McpJsonCompatibility compatibility)
@@ -95,6 +101,17 @@ namespace Nabu.Mcp.AspNetCore.Execution
                         if (header != null)
                         {
                             result.Headers[bindingName] = header;
+
+                            // Constants take the replaceExisting path; remember them so protected-header
+                            // enforcement can tell developer-pinned values from model-supplied ones.
+                            if (replaceExisting)
+                            {
+                                result.ConstantHeaders.Add(bindingName);
+                            }
+                            else
+                            {
+                                result.ConstantHeaders.Remove(bindingName);
+                            }
                         }
 
                         break;
