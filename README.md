@@ -8,8 +8,8 @@
 
 One attribute. Same endpoint. Same authorization. Same validation. Same middleware.
 
-`Nabu.Mcp.AspNetCore` turns existing controller actions into [Model Context Protocol](https://modelcontextprotocol.io)
-tools. It does not ask you to re-declare your endpoints, duplicate validation, or re-implement your
+`Nabu.Mcp.AspNetCore` turns existing controller actions and Minimal API route handlers into
+[Model Context Protocol](https://modelcontextprotocol.io) tools. It does not ask you to re-declare your endpoints, duplicate validation, or re-implement your
 security model. A tool call is replayed as a real HTTP request through **your application's own
 pipeline**, so authentication, authorization policies, action filters, model binding, model validation,
 exception handlers and every other piece of middleware keep working exactly as they do today. Tool
@@ -23,6 +23,11 @@ shows each caller only the tools it is actually allowed to invoke - see
 public ActionResult<TodoItem> GetById(Guid id) => ...
 ```
 
+```csharp
+app.MapGet("/customers/{id}", (int id) => ...)
+   .McpTool();                              // <- same thing for Minimal APIs
+```
+
 ---
 
 ## Contents
@@ -30,6 +35,7 @@ public ActionResult<TodoItem> GetById(Guid id) => ...
 - [Why replay the pipeline](#why-replay-the-pipeline)
 - [Getting started](#getting-started)
 - [Attributes](#attributes)
+- [Minimal APIs](#minimal-apis)
 - [One action, several tools](#one-action-several-tools)
 - [How arguments are mapped](#how-arguments-are-mapped)
 - [Schema generation](#schema-generation)
@@ -163,6 +169,9 @@ curl -X POST http://localhost:5000/mcp \
 | `[McpIgnore]` | controller, action, parameter, property | Excludes it. Always wins. |
 | `[McpParameter]` | parameter, property | Overrides the name, description, requiredness or example of one input. |
 
+For Minimal APIs the same declarations are made with the `.McpTool()` / `.McpIgnore()` endpoint
+conventions (or the same attributes on the handler delegate) - see [Minimal APIs](#minimal-apis).
+
 `[McpTool]` also accepts `Name`, `Title`, `Description`, `Enabled`, and the four MCP behaviour hints
 `ReadOnly`, `Destructive`, `Idempotent` and `OpenWorld`. The hints default to the HTTP semantics of the
 verb - GET is read-only and idempotent, DELETE and PUT are destructive - and any hint you set
@@ -177,6 +186,62 @@ explicitly overrides that default.
     Destructive = true)]
 public IActionResult Publish(Guid id) => ...
 ```
+
+## Minimal APIs
+
+Route handlers publish the same way controller actions do, through an endpoint convention instead of
+an attribute:
+
+```csharp
+app.MapGet("/customers/{id}", (int id, ICustomerService customers) => customers.Get(id))
+   .McpTool();
+
+app.MapPost("/orders", (CreateOrder order) => ...)
+   .McpTool("orders_create", "Places a new order.");
+```
+
+Everything works exactly as it does for controllers, because the machinery is the same: a tool call
+is replayed as a synthetic HTTP request through the whole pipeline, so `RequireAuthorization()`,
+`[Authorize]`, endpoint filters, rate limiting and validation all keep running, and
+`ToolVisibility` reads the endpoint's own authorization metadata when tailoring `tools/list` to the
+caller. An application without any controllers at all - `AddNabuMcp()` plus `UseNabuMcp()` on a
+plain `WebApplication` - is fully supported.
+
+Inputs are inferred with Minimal API binding rules, not MVC's:
+
+| Handler parameter | Becomes |
+|---|---|
+| Route token match, `[FromRoute]` | A URL segment. |
+| `string`, primitives, parsables, and collections of them; `[FromQuery]` | A query-string entry. |
+| Complex types (and collections of them), `[FromBody]` | The JSON request body, [flattened](#how-arguments-are-mapped) like `[FromBody]`. |
+| `[FromHeader]` | A request header (opt in with `ExposeHeaderParameters`). |
+| Services (per `IServiceProviderIsService`), `[FromServices]`, `[FromKeyedServices]` | Skipped - resolved by the framework. |
+| `HttpContext`, `CancellationToken`, `ClaimsPrincipal`, `Stream`, `PipeReader`, `BindAsync` types | Skipped - materialized from the request itself. |
+
+One real difference between the stacks is preserved rather than papered over: Minimal APIs answer
+400 when a non-nullable parameter without a default value is missing, so such a parameter is
+`required` in the tool schema - where MVC model binding would have silently used the type's default.
+
+The other `[McpTool]` surfaces work here too:
+
+- `.McpTool(tool => { ... })` exposes the full attribute surface - `IncludeParameters`,
+  `ConstantParameters`, behaviour hints - and calling `.McpTool(...)` repeatedly publishes
+  [several tools over one endpoint](#one-action-several-tools).
+- An attribute on the handler itself is equivalent to the extension:
+  `app.MapGet("/ping", [McpTool("ping")] () => ...)`.
+- `.McpIgnore()` (or `[McpIgnore]` on the handler) keeps an endpoint out of discovery, which
+  matters when `ExposeAllActions` is on - that option publishes every delegate route handler just
+  as it publishes every controller action, and `ExcludeFromDescription()` is respected the way
+  `[ApiExplorerSettings(IgnoreApi = true)]` is for controllers.
+
+Without an explicit name, tools are named from the endpoint name (`.WithName(...)`), the handler's
+method name when it is a real method rather than a lambda, or the verb and route -
+`GET /customers/{id}` becomes `customers_get_by_id`. `NabuMcpOptions.ToolNameFactory` sees these
+through the same `McpToolNamingContext` it sees controllers through.
+
+Current limitations: `[AsParameters]` models and form/`IFormFile` binding are not supported - such
+endpoints are skipped with a warning. Minimal API discovery needs endpoint routing, so it exists on
+the modern targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x.
 
 ## One action, several tools
 
@@ -457,7 +522,7 @@ All options live on `NabuMcpOptions`:
 | `Path` | `/mcp` | Endpoint path. |
 | `ServerName`, `ServerVersion`, `Instructions` | entry assembly | Reported during `initialize` / `server/discover`. |
 | `CacheTtlMilliseconds` | `60000` | `ttlMs` freshness hint on cacheable `2026-07-28` results. |
-| `ExposeAllActions` | `false` | Publish every action, not just annotated ones. `[McpIgnore]` still wins. |
+| `ExposeAllActions` | `false` | Publish every action and route handler, not just annotated ones. `[McpIgnore]` still wins. |
 | `RequireAuthorization`, `AuthorizationPolicy`, `AuthenticationSchemes` | off | Protects the MCP endpoint. |
 | `ToolVisibility` | `All` | Advertise every tool, or only the ones the caller is authenticated / authorized for. |
 | `AnonymousAccess` | `None` | How much of a protected endpoint an unauthorized caller may reach. |
@@ -576,9 +641,10 @@ XML documentation. Two accounts exist, both with the password `password`: `alice
 It is wired up for per-caller tool visibility, so the ordinary authorization attributes are visible at
 work. Connect without a token and `tools/list` returns the `weather_*` tools, because
 `WeatherController` carries `[AllowAnonymous]`, plus `todos_get_priorities`, because that one action
-carries `[AllowAnonymous]` even though its controller carries `[Authorize]` - and all of them can be
-called. The rest of the `todos_*` tools are neither advertised nor callable until you sign in, and
-`todos_delete` appears only for `root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
+carries `[AllowAnonymous]` even though its controller carries `[Authorize]`, plus `server_time_now`,
+a Minimal API endpoint published with `.McpTool()` - and all of them can be called. The rest of the
+`todos_*` tools are neither advertised nor callable until you sign in, and `todos_delete` appears
+only for `root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
 
 ```bash
 dotnet run --project samples/Nabu.Sample.TodoApi
@@ -599,7 +665,7 @@ docker compose up --build
 A one-shot init container signs in as `alice` and `root` on both samples and writes an Inspector
 config with three connections per sample, each to the same endpoint. For the Todo sample -
 `todo-anonymous`, `todo-alice-user` and `todo-root-admin` - switching between them in the UI shows
-the tool list grow from the 4 anonymous tools to alice's 10 to root's 11 (only root gets
+the tool list grow from the 5 anonymous tools to alice's 11 to root's 12 (only root gets
 `todos_delete`). For the book catalog served through the official SDK - `books-anonymous`,
 `books-alice-user` and `books-root-admin` - the list grows from the 2 search tools to alice's 3
 (`books_add`) to root's 4 (`books_remove`). The Todo API is published on
@@ -623,7 +689,7 @@ The demo tokens live for 24 hours; `docker compose up` again regenerates them.
 
 ```bash
 dotnet build          # netstandard2.0 + net8.0 + net10.0
-dotnet test           # 230 tests
+dotnet test           # 243 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
@@ -668,6 +734,7 @@ The workflow can also be started manually from the Actions tab with an explicit 
   features do not exist on a replayed request. Middleware that requires them will behave as it does
   when those features are absent.
 - Actions binding `IFormFile` or form data are skipped, with a warning; tools cannot supply files.
+  For Minimal APIs, `[AsParameters]` models are skipped the same way.
 - Attribute routing is what discovery is built around. Conventionally routed actions fall back to a
   `{controller}/{action}` path with the remaining arguments in the query string.
 - The server is stateless: no server-initiated notifications, no `listChanged`, no resumable streams.

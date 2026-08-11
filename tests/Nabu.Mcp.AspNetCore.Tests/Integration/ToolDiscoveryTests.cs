@@ -58,6 +58,24 @@ namespace Nabu.Mcp.AspNetCore.Tests.Integration
         }
 
         [Fact]
+        public async Task A_minimal_api_endpoint_published_with_McpTool_is_discovered_and_callable()
+        {
+            var tools = await ListToolsAsync();
+            var tool = Find(tools, "server_time_now");
+
+            Assert.Equal("Reports the server's current UTC time.", tool["description"]!.GetValue<string>());
+
+            var envelope = await _fixture.RpcAsync(
+                "tools/call",
+                new JsonObject { ["name"] = "server_time_now", ["arguments"] = new JsonObject() },
+                token: await _fixture.GetTokenAsync("alice"));
+
+            var result = envelope["result"]!.AsObject();
+            Assert.False(result["isError"]?.GetValue<bool>() ?? false);
+            Assert.NotNull(result["structuredContent"]!["utcNow"]);
+        }
+
+        [Fact]
         public async Task Actions_marked_with_McpIgnore_are_not_published()
         {
             var tools = await ListToolsAsync();

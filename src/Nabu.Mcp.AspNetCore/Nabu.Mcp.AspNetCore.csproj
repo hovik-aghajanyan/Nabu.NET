@@ -15,8 +15,9 @@
     <Title>Nabu.NET - MCP tools for ASP.NET Core Web APIs</Title>
     <Description>
       Expose existing ASP.NET Core Web API actions as Model Context Protocol (MCP) tools by adding a
-      single [McpTool] attribute. Tool calls are replayed through the application's own HTTP pipeline,
-      so authentication, authorization, filters, model binding and validation all keep working.
+      single [McpTool] attribute - or Minimal API endpoints with .McpTool(). Tool calls are replayed
+      through the application's own HTTP pipeline, so authentication, authorization, filters, model
+      binding and validation all keep working.
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
   </PropertyGroup>

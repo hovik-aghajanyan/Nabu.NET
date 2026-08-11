@@ -1,3 +1,4 @@
+using System;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
@@ -75,6 +76,14 @@ app.UseAuthorization();
 app.UseNabuMcp();
 
 app.MapControllers();
+
+// ---------------------------------------------------------------------------
+// Minimal APIs publish the same way - no controller involved. The route handler
+// is discovered from its endpoint metadata, and a tool call is replayed through
+// the same pipeline as everything else.
+// ---------------------------------------------------------------------------
+app.MapGet("/api/time", () => new { utcNow = DateTimeOffset.UtcNow })
+   .McpTool("server_time_now", "Reports the server's current UTC time.");
 
 app.Run();
 

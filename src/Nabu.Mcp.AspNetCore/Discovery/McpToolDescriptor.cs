@@ -114,7 +114,10 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public bool OpenWorld { get; set; }
     }
 
-    /// <summary>Everything Nabu needs to advertise and invoke one controller action as an MCP tool.</summary>
+    /// <summary>
+    /// Everything Nabu needs to advertise and invoke one HTTP endpoint - a controller action or a
+    /// Minimal API route handler - as an MCP tool.
+    /// </summary>
     public sealed class McpToolDescriptor
     {
         public McpToolDescriptor(
@@ -125,11 +128,22 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             IReadOnlyList<McpToolParameterDescriptor> parameters,
             JsonObject inputSchema,
             McpToolAnnotations annotations)
+            : this(name, httpMethod, routeTemplate, parameters, inputSchema, annotations)
+        {
+            Action = action;
+        }
+
+        public McpToolDescriptor(
+            string name,
+            string httpMethod,
+            string routeTemplate,
+            IReadOnlyList<McpToolParameterDescriptor> parameters,
+            JsonObject inputSchema,
+            McpToolAnnotations annotations)
         {
             Name = name;
             HttpMethod = httpMethod;
             RouteTemplate = routeTemplate;
-            Action = action;
             Parameters = parameters;
             InputSchema = inputSchema;
             Annotations = annotations;
@@ -146,7 +160,19 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         /// <summary>Route template with binding constraints stripped, for example <c>api/todos/{id}</c>.</summary>
         public string RouteTemplate { get; }
 
-        public ControllerActionDescriptor Action { get; }
+        /// <summary>
+        /// The MVC action behind the tool, or <c>null</c> when the tool was discovered from a Minimal
+        /// API endpoint - see <c>Endpoint</c> in that case.
+        /// </summary>
+        public ControllerActionDescriptor? Action { get; }
+
+#if !NETSTANDARD2_0
+        /// <summary>
+        /// The route endpoint behind the tool when it was discovered from a Minimal API route handler,
+        /// or <c>null</c> for controller-backed tools - see <see cref="Action"/> in that case.
+        /// </summary>
+        public Microsoft.AspNetCore.Http.Endpoint? Endpoint { get; set; }
+#endif
 
         /// <summary>Inputs the caller supplies. Excludes anything pinned through <see cref="Constants"/>.</summary>
         public IReadOnlyList<McpToolParameterDescriptor> Parameters { get; }

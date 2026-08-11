@@ -73,12 +73,25 @@ namespace Nabu.Mcp.AspNetCore
                 return new JsonSchemaGenerator(sp.GetRequiredService<IXmlDocumentationProvider>(), options.MaxSchemaDepth);
             });
 
+#if NETSTANDARD2_0
             services.TryAddSingleton<IMcpToolRegistry>(sp => new McpToolRegistry(
                 sp.GetRequiredService<Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider>(),
                 sp.GetRequiredService<IOptions<NabuMcpOptions>>(),
                 sp.GetRequiredService<JsonSchemaGenerator>(),
                 sp.GetRequiredService<IXmlDocumentationProvider>(),
                 sp.GetService<ILogger<McpToolRegistry>>()));
+#else
+            // Both discovery sources are optional: an app without controllers still exposes its
+            // Minimal API endpoints, and vice versa.
+            services.TryAddSingleton<IMcpToolRegistry>(sp => new McpToolRegistry(
+                sp.GetService<Microsoft.AspNetCore.Mvc.Infrastructure.IActionDescriptorCollectionProvider>(),
+                sp.GetRequiredService<IOptions<NabuMcpOptions>>(),
+                sp.GetRequiredService<JsonSchemaGenerator>(),
+                sp.GetRequiredService<IXmlDocumentationProvider>(),
+                sp.GetService<Microsoft.AspNetCore.Routing.EndpointDataSource>(),
+                sp.GetService<IServiceProviderIsService>(),
+                sp.GetService<ILogger<McpToolRegistry>>()));
+#endif
 
             services.TryAddSingleton(sp => McpJsonCompatibility.Detect(
                 sp,
