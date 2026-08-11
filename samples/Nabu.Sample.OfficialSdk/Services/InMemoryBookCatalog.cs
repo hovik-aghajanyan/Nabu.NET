@@ -56,5 +56,13 @@ namespace Nabu.Sample.OfficialSdk.Services
                 return book;
             }
         }
+
+        public bool Remove(int id)
+        {
+            lock (_gate)
+            {
+                return _books.RemoveAll(book => book.Id == id) > 0;
+            }
+        }
     }
 }

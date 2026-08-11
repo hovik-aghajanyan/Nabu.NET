@@ -1,19 +1,23 @@
-# Runs the sample TodoApi and MCP Inspector together to showcase Nabu's
-# per-identity tool exposure:
+# Runs both samples and MCP Inspector together to showcase Nabu's
+# per-identity tool exposure on both protocol layers:
 #
 #   docker compose up --build
 #   open http://localhost:6274?MCP_INSPECTOR_API_TOKEN=nabu-local-dev
 #
-# The Inspector's server list has three connections to the SAME endpoint:
-#   nabu-anonymous   -> weather tools + todos_get_priorities only
-#   nabu-alice-user  -> + alice's todo tools
-#   nabu-root-admin  -> + todos_delete (admin-only)
+# The Inspector's server list has three connections per sample, each hitting
+# the SAME endpoint:
+#   todo-anonymous    -> weather tools + todos_get_priorities only
+#   todo-alice-user   -> + alice's todo tools
+#   todo-root-admin   -> + todos_delete (admin-only)
+#   books-anonymous   -> books_search + books_get only
+#   books-alice-user  -> + books_add
+#   books-root-admin  -> + books_remove (admin-only)
 #
 # The same comparison, scriptable:
 #   docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
-#     --server nabu-anonymous --method tools/list
+#     --server todo-anonymous --method tools/list
 #   docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
-#     --server nabu-root-admin --method tools/list
+#     --server books-root-admin --method tools/list
 services:
   todo-api:
     build:
@@ -31,8 +35,25 @@ services:
       timeout: 3s
       retries: 30
 
-  # One-shot: logs in as alice and root, writes the Inspector catalog with
-  # anonymous / alice / root connections into the shared volume.
+  # The same tools-per-identity demo, served through the official
+  # ModelContextProtocol C# SDK instead of Nabu's built-in protocol layer.
+  official-sdk-api:
+    build:
+      context: .
+      dockerfile: samples/Nabu.Sample.OfficialSdk/Dockerfile
+    ports:
+      - "5081:8080"
+    environment:
+      Jwt__LifetimeMinutes: "1440"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: logs in as alice and root on both samples, writes the Inspector
+  # catalog with anonymous / alice / root connections per sample into the
+  # shared volume.
   inspector-config:
     image: curlimages/curl:latest
     # The curl image defaults to a non-root user that cannot write to the
@@ -44,6 +65,8 @@ services:
     entrypoint: ["/bin/sh", "/generate-inspector-config.sh"]
     depends_on:
       todo-api:
+        condition: service_healthy
+      official-sdk-api:
         condition: service_healthy
 
   inspector:
