@@ -1,49 +1,75 @@
 #!/bin/sh
-# Logs into the sample as alice (user) and root (admin) and writes an MCP
-# Inspector catalog with three connections to the same endpoint - anonymous,
-# alice, and root - so the tool list can be compared per identity.
+# Logs into both samples as alice (user) and root (admin) and writes an MCP
+# Inspector catalog with three connections per sample to the same endpoint -
+# anonymous, alice, and root - so the tool list can be compared per identity
+# on both protocol layers.
 set -eu
 
-API=${API_URL:-http://todo-api:8080}
+TODO_API=${TODO_API_URL:-http://todo-api:8080}
+BOOKS_API=${BOOKS_API_URL:-http://official-sdk-api:8080}
 OUT=${OUT_FILE:-/shared/mcp-servers.json}
 
-echo "Waiting for $API ..."
-until [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/auth/login" \
-      -H 'Content-Type: application/json' \
-      -d '{"username":"alice","password":"password"}')" = "200" ]; do
-  sleep 1
-done
+# $1: base URL of the API to wait for.
+wait_for_login() {
+  echo "Waiting for $1 ..."
+  until [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$1/api/auth/login" \
+        -H 'Content-Type: application/json' \
+        -d '{"username":"alice","password":"password"}')" = "200" ]; do
+    sleep 1
+  done
+}
 
+# $1: base URL, $2: username. Each sample signs its own tokens, so log in per API.
 token() {
-  curl -sf -X POST "$API/api/auth/login" \
+  curl -sf -X POST "$1/api/auth/login" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"$1\",\"password\":\"password\"}" \
+    -d "{\"username\":\"$2\",\"password\":\"password\"}" \
     | sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'
 }
 
-ALICE=$(token alice)
-ROOT=$(token root)
-[ -n "$ALICE" ] && [ -n "$ROOT" ] || { echo "Failed to obtain tokens" >&2; exit 1; }
+wait_for_login "$TODO_API"
+wait_for_login "$BOOKS_API"
+
+TODO_ALICE=$(token "$TODO_API" alice)
+TODO_ROOT=$(token "$TODO_API" root)
+BOOKS_ALICE=$(token "$BOOKS_API" alice)
+BOOKS_ROOT=$(token "$BOOKS_API" root)
+[ -n "$TODO_ALICE" ] && [ -n "$TODO_ROOT" ] && [ -n "$BOOKS_ALICE" ] && [ -n "$BOOKS_ROOT" ] \
+  || { echo "Failed to obtain tokens" >&2; exit 1; }
 
 cat > "$OUT" <<EOF
 {
   "mcpServers": {
-    "nabu-anonymous": {
+    "todo-anonymous": {
       "type": "http",
-      "url": "$API/mcp"
+      "url": "$TODO_API/mcp"
     },
-    "nabu-alice-user": {
+    "todo-alice-user": {
       "type": "http",
-      "url": "$API/mcp",
-      "headers": { "Authorization": "Bearer $ALICE" }
+      "url": "$TODO_API/mcp",
+      "headers": { "Authorization": "Bearer $TODO_ALICE" }
     },
-    "nabu-root-admin": {
+    "todo-root-admin": {
       "type": "http",
-      "url": "$API/mcp",
-      "headers": { "Authorization": "Bearer $ROOT" }
+      "url": "$TODO_API/mcp",
+      "headers": { "Authorization": "Bearer $TODO_ROOT" }
+    },
+    "books-anonymous": {
+      "type": "http",
+      "url": "$BOOKS_API/books/mcp"
+    },
+    "books-alice-user": {
+      "type": "http",
+      "url": "$BOOKS_API/books/mcp",
+      "headers": { "Authorization": "Bearer $BOOKS_ALICE" }
+    },
+    "books-root-admin": {
+      "type": "http",
+      "url": "$BOOKS_API/books/mcp",
+      "headers": { "Authorization": "Bearer $BOOKS_ROOT" }
     }
   }
 }
 EOF
 
-echo "Wrote $OUT (anonymous / alice / root)"
+echo "Wrote $OUT (anonymous / alice / root for todo and books)"

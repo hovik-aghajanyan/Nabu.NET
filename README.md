@@ -501,7 +501,11 @@ partial `AnonymousAccess` modes leave the endpoint anonymous and rely on the rep
 to authorize each call.
 
 `samples/Nabu.Sample.OfficialSdk` is a complete runnable example: a small book-catalog API
-published through the official SDK on a custom route (`app.UseNabuMcp("/books/mcp")`).
+published through the official SDK on a custom route (`app.UseNabuMcp("/books/mcp")`). It carries
+the same JWT setup and per-caller tool exposure as the Todo sample - `books_search` and
+`books_get` are anonymous, `books_add` requires a signed-in caller, and `books_remove` appears
+only for an administrator - showing that the authorization story is identical on both protocol
+layers.
 
 ## Target frameworks
 
@@ -544,28 +548,34 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ## Trying it with MCP Inspector
 
-`docker-compose.yml` runs the sample together with the official
+`docker-compose.yml` runs both samples together with the official
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector), preconfigured to demonstrate the
-per-caller tool exposure above:
+per-caller tool exposure above on both protocol layers:
 
 ```bash
 docker compose up --build
 # then open http://localhost:6274?MCP_INSPECTOR_API_TOKEN=nabu-local-dev
 ```
 
-A one-shot init container signs in as `alice` and `root` and writes an Inspector config with three
-connections to the same endpoint - `nabu-anonymous`, `nabu-alice-user` and `nabu-root-admin` - so
-switching between them in the UI shows the tool list grow from the 4 anonymous tools to alice's 10
-to root's 11 (only root gets `todos_delete`). The API itself is published on
-`http://localhost:5080/mcp` (5080 rather than 5000, which macOS AirPlay occupies).
+A one-shot init container signs in as `alice` and `root` on both samples and writes an Inspector
+config with three connections per sample, each to the same endpoint. For the Todo sample -
+`todo-anonymous`, `todo-alice-user` and `todo-root-admin` - switching between them in the UI shows
+the tool list grow from the 4 anonymous tools to alice's 10 to root's 11 (only root gets
+`todos_delete`). For the book catalog served through the official SDK - `books-anonymous`,
+`books-alice-user` and `books-root-admin` - the list grows from the 2 search tools to alice's 3
+(`books_add`) to root's 4 (`books_remove`). The Todo API is published on
+`http://localhost:5080/mcp` (5080 rather than 5000, which macOS AirPlay occupies) and the
+book catalog on `http://localhost:5081/books/mcp`.
 
 The same comparison from the terminal, via the Inspector CLI:
 
 ```bash
 docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
-  --server nabu-anonymous --method tools/list
+  --server todo-anonymous --method tools/list
 docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
-  --server nabu-root-admin --method tools/list
+  --server todo-root-admin --method tools/list
+docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+  --server books-root-admin --method tools/list
 ```
 
 The demo tokens live for 24 hours; `docker compose up` again regenerates them.

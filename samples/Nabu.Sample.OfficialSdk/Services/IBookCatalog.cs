@@ -10,5 +10,7 @@ namespace Nabu.Sample.OfficialSdk.Services
         Book? Get(int id);
 
         Book Add(string title, string author, int year);
+
+        bool Remove(int id);
     }
 }
