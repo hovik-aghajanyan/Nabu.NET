@@ -20,6 +20,7 @@
       binding and validation all keep working.
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
+    <PackageProjectUrl>https://nabu.aghajanyan.me</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>

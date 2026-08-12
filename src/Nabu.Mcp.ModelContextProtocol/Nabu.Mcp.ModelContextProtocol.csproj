@@ -18,6 +18,7 @@
       discovery, schema generation, authorization-aware visibility and pipeline replay.
     </Description>
     <PackageTags>mcp;model-context-protocol;aspnetcore;webapi;ai;llm;tools</PackageTags>
+    <PackageProjectUrl>https://nabu.aghajanyan.me</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
