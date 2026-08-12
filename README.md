@@ -693,10 +693,12 @@ XML documentation. Two accounts exist, both with the password `password`: `alice
 It is wired up for per-caller tool visibility, so the ordinary authorization attributes are visible at
 work. Connect without a token and `tools/list` returns the `weather_*` tools, because
 `WeatherController` carries `[AllowAnonymous]`, plus `todos_get_priorities`, because that one action
-carries `[AllowAnonymous]` even though its controller carries `[Authorize]`, plus `server_time_now`,
-a Minimal API endpoint published with `.McpTool()` - and all of them can be called. The rest of the
-`todos_*` tools are neither advertised nor callable until you sign in, and `todos_delete` appears
-only for `root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
+carries `[AllowAnonymous]` even though its controller carries `[Authorize]`, plus `server_time_now`
+and `server_time_in_zone`, two Minimal API endpoints published with `.McpTool()` (the latter binds an
+`[AsParameters]` record) - and all of them can be called. The rest of the `todos_*` tools are neither
+advertised nor callable until you sign in - among them `todos_attach`, which uploads a file to a todo
+item as a base64 argument replayed as multipart/form-data - and `todos_delete` appears only for
+`root`, because it carries `[Authorize(Policy = "AdminOnly")]`.
 
 ```bash
 dotnet run --project samples/Nabu.Sample.TodoApi
@@ -717,7 +719,7 @@ docker compose up --build
 A one-shot init container signs in as `alice` and `root` on both samples and writes an Inspector
 config with three connections per sample, each to the same endpoint. For the Todo sample -
 `todo-anonymous`, `todo-alice-user` and `todo-root-admin` - switching between them in the UI shows
-the tool list grow from the 5 anonymous tools to alice's 11 to root's 12 (only root gets
+the tool list grow from the 6 anonymous tools to alice's 13 to root's 14 (only root gets
 `todos_delete`). For the book catalog served through the official SDK - `books-anonymous`,
 `books-alice-user` and `books-root-admin` - the list grows from the 2 search tools to alice's 3
 (`books_add`) to root's 4 (`books_remove`). The Todo API is published on

@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
@@ -85,9 +86,46 @@ app.MapControllers();
 app.MapGet("/api/time", () => new { utcNow = DateTimeOffset.UtcNow })
    .McpTool("server_time_now", "Reports the server's current UTC time.");
 
+// [AsParameters]: the handler gathers its inputs into one record, and each member is published as
+// an individual tool input with the same binding inference it would get as a top-level parameter -
+// here `timeZone` from the route and `format` from the query string.
+app.MapGet("/api/time/{timeZone}", ([AsParameters] TimeInZoneQuery query) =>
+{
+    TimeZoneInfo zone;
+    try
+    {
+        zone = TimeZoneInfo.FindSystemTimeZoneById(query.TimeZone);
+    }
+    catch (TimeZoneNotFoundException)
+    {
+        return Results.NotFound(new { message = "Unknown time zone '" + query.TimeZone + "'." });
+    }
+
+    var now = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone);
+    try
+    {
+        return Results.Ok(new
+        {
+            timeZone = zone.Id,
+            now = now.ToString(query.Format ?? "O", System.Globalization.CultureInfo.InvariantCulture),
+            utcOffset = zone.GetUtcOffset(now).ToString(),
+        });
+    }
+    catch (FormatException)
+    {
+        return Results.BadRequest(new { message = "Invalid format string '" + query.Format + "'." });
+    }
+})
+.McpTool("server_time_in_zone", "Reports the server's current time in a named time zone.");
+
 app.Run();
 
 /// <summary>Exposed so the integration tests can host the application with WebApplicationFactory.</summary>
 public partial class Program
 {
 }
+
+/// <summary>Inputs of the <c>server_time_in_zone</c> tool, gathered with <c>[AsParameters]</c>.</summary>
+/// <param name="TimeZone">IANA or Windows time zone identifier, for example <c>Asia/Yerevan</c>.</param>
+/// <param name="Format">Optional .NET date format string. Defaults to round-trip (<c>O</c>).</param>
+public record TimeInZoneQuery(string TimeZone, string? Format = null);

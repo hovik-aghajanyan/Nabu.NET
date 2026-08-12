@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Nabu.Mcp.AspNetCore;
 using Nabu.Sample.TodoApi.Models;
@@ -150,6 +151,38 @@ namespace Nabu.Sample.TodoApi.Controllers
             });
 
             return item == null ? NotFound(new { message = "No todo item with id " + id + "." }) : (ActionResult<TodoItem>)Ok(item);
+        }
+
+        /// <summary>Attaches a file to a todo item. The sample keeps the file's metadata, not its bytes.</summary>
+        /// <remarks>
+        /// A form-binding action publishes like any other: the <paramref name="file"/> argument is
+        /// advertised to the model as base64 content plus an optional file name and MIME type, and the
+        /// tool call is replayed as a real multipart/form-data request - so this action reads its
+        /// <see cref="IFormFile"/> exactly as it would for a browser upload.
+        /// </remarks>
+        /// <param name="id">Identifier of the item to attach the file to.</param>
+        /// <param name="file">The file to attach.</param>
+        /// <param name="description">Optional description of the attachment.</param>
+        [HttpPost("{id:guid}/attachments")]
+        [McpTool(Idempotent = false)]
+        public ActionResult<TodoAttachment> Attach(
+            Guid id,
+            IFormFile file,
+            [FromForm] [System.ComponentModel.DataAnnotations.StringLength(500)] string? description)
+        {
+            var attachment = new TodoAttachment
+            {
+                Id = Guid.NewGuid(),
+                FileName = file.FileName,
+                ContentType = file.ContentType,
+                SizeBytes = file.Length,
+                Description = description,
+            };
+
+            var item = _repository.Update(Owner, id, existing => existing.Attachments.Add(attachment));
+            return item == null
+                ? NotFound(new { message = "No todo item with id " + id + "." })
+                : (ActionResult<TodoAttachment>)Ok(attachment);
         }
 
         /// <summary>
