@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text.Json.Nodes;
 using System.Threading;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -171,10 +172,15 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             }
 
             // Map() without verbs: mirror the controller inference - POST when something binds from
-            // the body, GET otherwise.
+            // the body or the form, GET otherwise.
             if (httpMethod.Length == 0)
             {
-                httpMethod = allParameters.Any(p => p.Source == McpParameterSource.Body) ? "POST" : "GET";
+                httpMethod = allParameters.Any(p =>
+                    p.Source == McpParameterSource.Body ||
+                    p.Source == McpParameterSource.Form ||
+                    p.Source == McpParameterSource.FormFile)
+                    ? "POST"
+                    : "GET";
                 display = httpMethod + " /" + routeTemplate;
             }
 
@@ -345,7 +351,6 @@ namespace Nabu.Mcp.AspNetCore.Discovery
 
             foreach (var parameterInfo in method.GetParameters())
             {
-                var type = parameterInfo.ParameterType;
                 var attributes = parameterInfo.GetCustomAttributes().ToList();
 
                 if (attributes.Any(a => a is McpIgnoreAttribute))
@@ -353,113 +358,289 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     continue;
                 }
 
-                if (IsIgnoredType(type) || typeof(System.IO.Pipelines.PipeReader).IsAssignableFrom(type))
-                {
-                    continue;
-                }
-
-                if (attributes.Any(a => a is IFromServiceMetadata || a is FromKeyedServicesAttribute))
-                {
-                    continue;
-                }
-
-                if (IsFormType(type) || attributes.Any(a => a is IFromFormMetadata))
-                {
-                    _logger.LogWarning(
-                        "Nabu MCP skipped {Endpoint}: parameter '{Parameter}' binds form data, which tools cannot supply.",
-                        display,
-                        parameterInfo.Name);
-                    return false;
-                }
-
                 if (attributes.Any(a => a is AsParametersAttribute))
                 {
-                    _logger.LogWarning(
-                        "Nabu MCP skipped {Endpoint}: [AsParameters] on '{Parameter}' is not supported yet. " +
-                        "Bind the values as individual handler parameters to expose this endpoint as a tool.",
-                        display,
-                        parameterInfo.Name);
-                    return false;
-                }
-
-                var bindingName = parameterInfo.Name ?? string.Empty;
-                McpParameterSource source;
-
-                var fromRoute = attributes.OfType<IFromRouteMetadata>().FirstOrDefault();
-                var fromQuery = attributes.OfType<IFromQueryMetadata>().FirstOrDefault();
-                var fromHeader = attributes.OfType<IFromHeaderMetadata>().FirstOrDefault();
-                var fromBody = attributes.OfType<IFromBodyMetadata>().FirstOrDefault();
-
-                if (fromRoute != null)
-                {
-                    source = McpParameterSource.Route;
-                    bindingName = fromRoute.Name ?? bindingName;
-                }
-                else if (fromQuery != null)
-                {
-                    source = McpParameterSource.Query;
-                    bindingName = fromQuery.Name ?? bindingName;
-                }
-                else if (fromHeader != null)
-                {
-                    if (!_options.ExposeHeaderParameters)
+                    if (!TryExpandAsParameters(method, parameterInfo, routeTemplate, display, parameters, seen))
                     {
-                        continue;
+                        return false;
                     }
 
-                    source = McpParameterSource.Header;
-                    bindingName = fromHeader.Name ?? bindingName;
-                }
-                else if (fromBody != null)
-                {
-                    source = McpParameterSource.Body;
-                }
-                else if (RouteTemplateHelper.ContainsToken(routeTemplate, bindingName))
-                {
-                    source = McpParameterSource.Route;
-                }
-                else if (!JsonSchemaGenerator.IsComplexObject(type) &&
-                         !HasComplexElementType(type))
-                {
-                    // Strings, primitives, parsables and their collections bind from the query string.
-                    source = McpParameterSource.Query;
-                }
-                else if (_serviceProviderIsService != null && _serviceProviderIsService.IsService(type))
-                {
-                    // Minimal APIs bind a parameter the container can resolve from services, so it is
-                    // not part of the endpoint's request surface.
                     continue;
-                }
-                else if (HasBindAsync(type))
-                {
-                    // The framework materializes these from the HttpContext itself; a tool cannot and
-                    // need not supply them.
-                    continue;
-                }
-                else if (HasTryParse(type))
-                {
-                    source = McpParameterSource.Query;
-                }
-                else
-                {
-                    // Unlike MVC, Minimal APIs infer the body for complex types on every verb.
-                    source = McpParameterSource.Body;
                 }
 
-                AddParameter(
+                AddEndpointMember(
                     method,
-                    parameterInfo.Name ?? bindingName,
-                    bindingName,
-                    type,
-                    parameterInfo,
-                    source,
                     routeTemplate,
+                    parameterInfo.Name ?? string.Empty,
+                    parameterInfo.ParameterType,
+                    attributes,
+                    parameterInfo,
+                    propertyInfo: null,
                     parameters,
-                    seen,
-                    valueTypesDefaultToOptional: false);
+                    seen);
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Adds one bindable member - a handler parameter, or a constructor parameter / property of an
+        /// <c>[AsParameters]</c> surface type - applying Minimal API binding inference. Members the
+        /// framework materializes itself (services, <c>HttpContext</c>, <c>BindAsync</c> types, ...)
+        /// are silently skipped.
+        /// </summary>
+        private void AddEndpointMember(
+            MethodInfo method,
+            string routeTemplate,
+            string memberName,
+            Type type,
+            IList<Attribute> attributes,
+            ParameterInfo? parameterInfo,
+            PropertyInfo? propertyInfo,
+            List<McpToolParameterDescriptor> parameters,
+            ISet<string> seen)
+        {
+            if (IsIgnoredType(type) || typeof(System.IO.Pipelines.PipeReader).IsAssignableFrom(type))
+            {
+                return;
+            }
+
+            if (attributes.Any(a => a is IFromServiceMetadata || a is FromKeyedServicesAttribute))
+            {
+                return;
+            }
+
+            var bindingName = memberName;
+            McpParameterSource source;
+            JsonObject? schemaOverride = null;
+            var isFormRoot = false;
+
+            var fromRoute = attributes.OfType<IFromRouteMetadata>().FirstOrDefault();
+            var fromQuery = attributes.OfType<IFromQueryMetadata>().FirstOrDefault();
+            var fromHeader = attributes.OfType<IFromHeaderMetadata>().FirstOrDefault();
+            var fromBody = attributes.OfType<IFromBodyMetadata>().FirstOrDefault();
+            var fromForm = attributes.OfType<IFromFormMetadata>().FirstOrDefault();
+            var formKind = GetFormParameterKind(type);
+
+            if (formKind == FormParameterKind.File || formKind == FormParameterKind.FileCollection)
+            {
+                source = McpParameterSource.FormFile;
+                bindingName = fromForm?.Name ?? bindingName;
+                schemaOverride = BuildFileArgumentSchema(formKind == FormParameterKind.FileCollection);
+            }
+            else if (formKind == FormParameterKind.FormCollection)
+            {
+                source = McpParameterSource.Form;
+                schemaOverride = BuildFormCollectionSchema();
+                isFormRoot = true;
+            }
+            else if (fromForm != null)
+            {
+                source = McpParameterSource.Form;
+                bindingName = fromForm.Name ?? bindingName;
+            }
+            else if (fromRoute != null)
+            {
+                source = McpParameterSource.Route;
+                bindingName = fromRoute.Name ?? bindingName;
+            }
+            else if (fromQuery != null)
+            {
+                source = McpParameterSource.Query;
+                bindingName = fromQuery.Name ?? bindingName;
+            }
+            else if (fromHeader != null)
+            {
+                if (!_options.ExposeHeaderParameters)
+                {
+                    return;
+                }
+
+                source = McpParameterSource.Header;
+                bindingName = fromHeader.Name ?? bindingName;
+            }
+            else if (fromBody != null)
+            {
+                source = McpParameterSource.Body;
+            }
+            else if (RouteTemplateHelper.ContainsToken(routeTemplate, bindingName))
+            {
+                source = McpParameterSource.Route;
+            }
+            else if (!JsonSchemaGenerator.IsComplexObject(type) &&
+                     !HasComplexElementType(type))
+            {
+                // Strings, primitives, parsables and their collections bind from the query string.
+                source = McpParameterSource.Query;
+            }
+            else if (_serviceProviderIsService != null && _serviceProviderIsService.IsService(type))
+            {
+                // Minimal APIs bind a parameter the container can resolve from services, so it is
+                // not part of the endpoint's request surface.
+                return;
+            }
+            else if (HasBindAsync(type))
+            {
+                // The framework materializes these from the HttpContext itself; a tool cannot and
+                // need not supply them.
+                return;
+            }
+            else if (HasTryParse(type))
+            {
+                source = McpParameterSource.Query;
+            }
+            else
+            {
+                // Unlike MVC, Minimal APIs infer the body for complex types on every verb.
+                source = McpParameterSource.Body;
+            }
+
+            AddParameter(
+                method,
+                memberName,
+                bindingName,
+                type,
+                parameterInfo,
+                source,
+                routeTemplate,
+                parameters,
+                seen,
+                valueTypesDefaultToOptional: false,
+                propertyInfo: propertyInfo,
+                schemaOverride: schemaOverride,
+                isFormRoot: isFormRoot);
+        }
+
+        /// <summary>
+        /// Expands an <c>[AsParameters]</c> surface type into individual tool inputs. Each constructor
+        /// parameter and settable property is bound with the same inference it would get as a top-level
+        /// handler parameter, which is how <c>RequestDelegateFactory</c> treats them.
+        /// </summary>
+        private bool TryExpandAsParameters(
+            MethodInfo method,
+            ParameterInfo parameterInfo,
+            string routeTemplate,
+            string display,
+            List<McpToolParameterDescriptor> parameters,
+            ISet<string> seen)
+        {
+            var type = parameterInfo.ParameterType;
+            if (!JsonSchemaGenerator.IsComplexObject(type))
+            {
+                _logger.LogWarning(
+                    "Nabu MCP skipped {Endpoint}: [AsParameters] on '{Parameter}' does not target a class or struct with bindable members.",
+                    display,
+                    parameterInfo.Name);
+                return false;
+            }
+
+            foreach (var member in GetAsParametersMembers(type))
+            {
+                if (member.Attributes.Any(a => a is McpIgnoreAttribute))
+                {
+                    continue;
+                }
+
+                if (member.Attributes.Any(a => a is AsParametersAttribute))
+                {
+                    _logger.LogWarning(
+                        "Nabu MCP skipped {Endpoint}: nested [AsParameters] on '{Member}' is not supported.",
+                        display,
+                        member.Name);
+                    return false;
+                }
+
+                AddEndpointMember(
+                    method,
+                    routeTemplate,
+                    member.Name,
+                    member.Type,
+                    member.Attributes,
+                    member.Parameter,
+                    member.Property,
+                    parameters,
+                    seen);
+            }
+
+            return true;
+        }
+
+        private readonly struct AsParametersMember
+        {
+            public AsParametersMember(string name, Type type, IList<Attribute> attributes, ParameterInfo? parameter, PropertyInfo? property)
+            {
+                Name = name;
+                Type = type;
+                Attributes = attributes;
+                Parameter = parameter;
+                Property = property;
+            }
+
+            public string Name { get; }
+
+            public Type Type { get; }
+
+            public IList<Attribute> Attributes { get; }
+
+            public ParameterInfo? Parameter { get; }
+
+            public PropertyInfo? Property { get; }
+        }
+
+        /// <summary>
+        /// The bindable surface of an <c>[AsParameters]</c> type: the parameters of its single public
+        /// parameterized constructor (records), merged with attributes from matching properties, plus
+        /// any settable properties the constructor does not cover (mutable classes and structs).
+        /// </summary>
+        private static IEnumerable<AsParametersMember> GetAsParametersMembers(Type type)
+        {
+            var properties = type
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.GetIndexParameters().Length == 0)
+                .ToList();
+
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var constructors = type.GetConstructors();
+            var constructor = constructors.Length == 1 && constructors[0].GetParameters().Length > 0
+                ? constructors[0]
+                : null;
+
+            if (constructor != null)
+            {
+                foreach (var parameter in constructor.GetParameters())
+                {
+                    var attributes = parameter.GetCustomAttributes().ToList();
+                    var property = properties.FirstOrDefault(p =>
+                        string.Equals(p.Name, parameter.Name, StringComparison.OrdinalIgnoreCase));
+                    if (property != null)
+                    {
+                        covered.Add(property.Name);
+                        attributes.AddRange(property.GetCustomAttributes());
+                    }
+
+                    yield return new AsParametersMember(
+                        parameter.Name ?? string.Empty,
+                        parameter.ParameterType,
+                        attributes,
+                        parameter,
+                        property);
+                }
+            }
+
+            foreach (var property in properties)
+            {
+                if (covered.Contains(property.Name) || !property.CanWrite)
+                {
+                    continue;
+                }
+
+                yield return new AsParametersMember(
+                    property.Name,
+                    property.PropertyType,
+                    property.GetCustomAttributes().ToList(),
+                    null,
+                    property);
+            }
         }
 
         /// <summary>

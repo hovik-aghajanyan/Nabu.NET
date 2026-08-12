@@ -183,8 +183,10 @@ app.UseNabuMcp(); // now mounts the official SDK's Streamable HTTP endpoint at t
         HTTP/2-specific server features, WebSockets, response upgrade, raw transport access and some
         IIS/Kestrel-specific features do not exist on a replayed request. Middleware that requires them
         will behave as it does when those features are absent.</li>
-      <li>Actions binding <code>IFormFile</code> or form data are skipped, with a warning; tools cannot
-        supply files. For Minimal APIs, <code>[AsParameters]</code> models are skipped the same way.</li>
+      <li>File uploads are supported: <code>IFormFile</code> and form-data actions publish file
+        arguments that carry the content base64-encoded, replayed as multipart/form-data. The content
+        travels inside the JSON-RPC body, so uploads are bounded by the MCP endpoint's request-size
+        limits — fine for documents and images, wrong for very large payloads.</li>
       <li>Attribute routing is what discovery is built around. Conventionally routed actions fall back to
         a <code>{controller}/{action}</code> path with the remaining arguments in the query string.</li>
       <li>The server is stateless: no server-initiated notifications, no <code>listChanged</code>, no

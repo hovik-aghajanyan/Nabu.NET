@@ -95,16 +95,24 @@ namespace Nabu.Mcp.AspNetCore.Execution
             var bound = McpArgumentBinder.Bind(tool, arguments, _compatibility);
 
             byte[]? bodyBytes = null;
-            if (bound.Body != null)
+            string? bodyContentType = null;
+            if (bound.IsForm)
+            {
+                // A form-binding endpoint always gets a form body - even an empty one - so that the
+                // action's ReadFormAsync sees a well-formed request rather than a missing content type.
+                bodyBytes = FormBodyEncoder.Encode(bound, out bodyContentType);
+            }
+            else if (bound.Body != null)
             {
                 bodyBytes = Encoding.UTF8.GetBytes(bound.Body.ToJsonString());
+                bodyContentType = McpConstants.JsonContentType + "; charset=utf-8";
             }
 
             using (var scope = _scopeFactory.CreateScope())
             using (var requestBody = bodyBytes == null ? Stream.Null : new MemoryStream(bodyBytes, writable: false))
             using (var responseBody = new CappedResponseStream(_options.MaxResponseBytes))
             {
-                var features = BuildFeatures(tool, originalContext, bound, bodyBytes, requestBody, responseBody, scope, cancellationToken);
+                var features = BuildFeatures(tool, originalContext, bound, bodyBytes, bodyContentType, requestBody, responseBody, scope, cancellationToken);
 
                 var previousAccessorContext = _httpContextAccessor?.HttpContext;
                 var context = _httpContextFactory != null
@@ -160,6 +168,7 @@ namespace Nabu.Mcp.AspNetCore.Execution
             HttpContext originalContext,
             McpArgumentBinder.BoundRequest bound,
             byte[]? bodyBytes,
+            string? bodyContentType,
             Stream requestBody,
             Stream responseBody,
             IServiceScope scope,
@@ -190,7 +199,7 @@ namespace Nabu.Mcp.AspNetCore.Execution
 
             if (bodyBytes != null)
             {
-                headers["Content-Type"] = McpConstants.JsonContentType + "; charset=utf-8";
+                headers["Content-Type"] = bodyContentType ?? McpConstants.JsonContentType + "; charset=utf-8";
                 headers["Content-Length"] = bodyBytes.Length.ToString(CultureInfo.InvariantCulture);
             }
 
