@@ -40,12 +40,20 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             typeof(Stream),
         };
 
-        private static readonly string[] FormParameterTypeNames =
+        /// <summary>How a parameter participates in form binding, if it does at all.</summary>
+        internal enum FormParameterKind
         {
-            "Microsoft.AspNetCore.Http.IFormFile",
-            "Microsoft.AspNetCore.Http.IFormFileCollection",
-            "Microsoft.AspNetCore.Http.IFormCollection",
-        };
+            None,
+
+            /// <summary>A single <see cref="IFormFile"/>.</summary>
+            File,
+
+            /// <summary>An <see cref="IFormFileCollection"/> or any collection of <see cref="IFormFile"/>.</summary>
+            FileCollection,
+
+            /// <summary>The whole form, bound as <see cref="IFormCollection"/>.</summary>
+            FormCollection,
+        }
 
         private readonly IActionDescriptorCollectionProvider? _actionProvider;
         private readonly NabuMcpOptions _options;
@@ -781,9 +789,13 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 return methods[0].ToUpperInvariant();
             }
 
-            // No explicit verb: infer from whether anything is bound from the body.
+            // No explicit verb: infer from whether anything is bound from the body or the form.
             var hasBody = action.Parameters.Any(p =>
-                p.BindingInfo?.BindingSource != null && p.BindingInfo.BindingSource.Id == BindingSource.Body.Id);
+                (p.BindingInfo?.BindingSource != null &&
+                 (p.BindingInfo.BindingSource.Id == BindingSource.Body.Id ||
+                  p.BindingInfo.BindingSource.Id == BindingSource.Form.Id ||
+                  p.BindingInfo.BindingSource.Id == BindingSource.FormFile.Id)) ||
+                GetFormParameterKind(p.ParameterType) != FormParameterKind.None);
 
             return hasBody ? "POST" : "GET";
         }
@@ -839,14 +851,40 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     continue;
                 }
 
-                if (IsFormType(parameter.ParameterType))
+                var bindingName = parameter.BindingInfo?.BinderModelName ?? parameter.Name;
+                var formKind = GetFormParameterKind(parameter.ParameterType);
+
+                if (formKind == FormParameterKind.File || formKind == FormParameterKind.FileCollection)
                 {
-                    _logger.LogWarning(
-                        "Nabu MCP skipped {Controller}.{Action}: parameter '{Parameter}' binds form data, which tools cannot supply.",
-                        action.ControllerName,
-                        action.ActionName,
-                        parameter.Name);
-                    return false;
+                    AddParameter(
+                        action.MethodInfo,
+                        parameter.Name,
+                        bindingName,
+                        parameter.ParameterType,
+                        parameterInfo,
+                        McpParameterSource.FormFile,
+                        routeTemplate,
+                        parameters,
+                        seen,
+                        schemaOverride: BuildFileArgumentSchema(formKind == FormParameterKind.FileCollection));
+                    continue;
+                }
+
+                if (formKind == FormParameterKind.FormCollection)
+                {
+                    AddParameter(
+                        action.MethodInfo,
+                        parameter.Name,
+                        bindingName,
+                        parameter.ParameterType,
+                        parameterInfo,
+                        McpParameterSource.Form,
+                        routeTemplate,
+                        parameters,
+                        seen,
+                        schemaOverride: BuildFormCollectionSchema(),
+                        isFormRoot: true);
+                    continue;
                 }
 
                 var source = parameter.BindingInfo?.BindingSource;
@@ -858,16 +896,6 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                         continue;
                     }
 
-                    if (source.Id == BindingSource.Form.Id || source.Id == BindingSource.FormFile.Id)
-                    {
-                        _logger.LogWarning(
-                            "Nabu MCP skipped {Controller}.{Action}: parameter '{Parameter}' binds form data.",
-                            action.ControllerName,
-                            action.ActionName,
-                            parameter.Name);
-                        return false;
-                    }
-
                     if (source.Id == BindingSource.Header.Id && !_options.ExposeHeaderParameters)
                     {
                         continue;
@@ -875,7 +903,6 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 }
 
                 var resolved = ResolveSource(source, parameter, parameterInfo, httpMethod, routeTemplate);
-                var bindingName = parameter.BindingInfo?.BinderModelName ?? parameter.Name;
                 AddParameter(
                     action.MethodInfo,
                     parameter.Name,
@@ -919,6 +946,16 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 {
                     return McpParameterSource.Header;
                 }
+
+                if (source.Id == BindingSource.Form.Id)
+                {
+                    return McpParameterSource.Form;
+                }
+
+                if (source.Id == BindingSource.FormFile.Id)
+                {
+                    return McpParameterSource.FormFile;
+                }
             }
 
             var bindingName = parameter.BindingInfo?.BinderModelName ?? parameter.Name;
@@ -946,19 +983,30 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             string routeTemplate,
             List<McpToolParameterDescriptor> parameters,
             ISet<string> seen,
-            bool valueTypesDefaultToOptional = true)
+            bool valueTypesDefaultToOptional = true,
+            PropertyInfo? propertyInfo = null,
+            JsonObject? schemaOverride = null,
+            bool isFormRoot = false)
         {
             var attributes = parameterInfo?.GetCustomAttributes().ToList() ?? new List<Attribute>();
-            var mcpAttribute = parameterInfo?.GetCustomAttribute<McpParameterAttribute>();
+            if (propertyInfo != null)
+            {
+                attributes.AddRange(propertyInfo.GetCustomAttributes());
+            }
+
+            var mcpAttribute = attributes.OfType<McpParameterAttribute>().FirstOrDefault();
 
             var description = JsonSchemaGenerator.ReadDescription(attributes)
                               ?? (documentationMethod != null
                                   ? _documentation.GetParameterDescription(documentationMethod, parameterName)
-                                  : null);
+                                  : null)
+                              ?? (propertyInfo != null ? _documentation.GetSummary(propertyInfo) : null);
 
             var isComplex = JsonSchemaGenerator.IsComplexObject(type);
-            var shouldFlatten = isComplex &&
+            var shouldFlatten = schemaOverride == null &&
+                                isComplex &&
                                 (source == McpParameterSource.Query ||
+                                 source == McpParameterSource.Form ||
                                  (source == McpParameterSource.Body && _options.FlattenBodyParameter));
 
             if (shouldFlatten)
@@ -969,6 +1017,28 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                     foreach (var property in properties)
                     {
                         var name = Deduplicate(property.Name, seen);
+
+                        // A file-typed property of a form model stays a file argument: it becomes a
+                        // multipart part named after the property, which is where model binding looks.
+                        var propertyKind = source == McpParameterSource.Form
+                            ? GetFormParameterKind(property.ClrType)
+                            : FormParameterKind.None;
+
+                        if (propertyKind == FormParameterKind.File || propertyKind == FormParameterKind.FileCollection)
+                        {
+                            parameters.Add(new McpToolParameterDescriptor(
+                                name,
+                                property.Name,
+                                McpParameterSource.FormFile,
+                                property.ClrType,
+                                property.IsRequired,
+                                BuildFileArgumentSchema(propertyKind == FormParameterKind.FileCollection))
+                            {
+                                Description = property.Description,
+                            });
+                            continue;
+                        }
+
                         parameters.Add(new McpToolParameterDescriptor(
                             name,
                             property.Name,
@@ -992,8 +1062,10 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 source == McpParameterSource.Header ? parameterName : bindingName);
             schemaName = Deduplicate(schemaName, seen);
 
-            var nullable = parameterInfo != null ? NullabilityHelper.IsNullable(parameterInfo) : null;
-            var schema = _schemaGenerator.Generate(type, attributes, nullable);
+            var nullable = parameterInfo != null
+                ? NullabilityHelper.IsNullable(parameterInfo)
+                : propertyInfo != null ? NullabilityHelper.IsNullable(propertyInfo) : null;
+            var schema = schemaOverride ?? _schemaGenerator.Generate(type, attributes, nullable);
 
             if (!string.IsNullOrEmpty(description) && schema["description"] == null)
             {
@@ -1001,11 +1073,19 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             }
 
             var isRequired = ResolveRequired(
-                type, parameterInfo, attributes, mcpAttribute, source, routeTemplate, bindingName, nullable, valueTypesDefaultToOptional);
+                type,
+                parameterInfo?.HasDefaultValue == true,
+                attributes,
+                mcpAttribute,
+                source,
+                routeTemplate,
+                bindingName,
+                nullable,
+                valueTypesDefaultToOptional);
 
             parameters.Add(new McpToolParameterDescriptor(schemaName, bindingName, source, type, isRequired, schema)
             {
-                IsBodyRoot = source == McpParameterSource.Body,
+                IsBodyRoot = source == McpParameterSource.Body || isFormRoot,
                 Description = description,
             });
         }
@@ -1037,7 +1117,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         /// </remarks>
         private static bool ResolveRequired(
             Type parameterType,
-            ParameterInfo? parameterInfo,
+            bool hasDefaultValue,
             IList<Attribute> attributes,
             McpParameterAttribute? mcpAttribute,
             McpParameterSource source,
@@ -1056,7 +1136,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 return true;
             }
 
-            if (parameterInfo != null && parameterInfo.HasDefaultValue)
+            if (hasDefaultValue)
             {
                 return false;
             }
@@ -1066,7 +1146,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
                 return RouteTemplateHelper.ContainsToken(routeTemplate, bindingName);
             }
 
-            if (source == McpParameterSource.Body)
+            if (source == McpParameterSource.Body || source == McpParameterSource.FormFile)
             {
                 return nullable != true;
             }
@@ -1121,33 +1201,83 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             return false;
         }
 
-        private static bool IsFormType(Type type)
+        internal static FormParameterKind GetFormParameterKind(Type type)
         {
-            var candidates = new List<Type> { type };
+            if (typeof(IFormFile).IsAssignableFrom(type))
+            {
+                return FormParameterKind.File;
+            }
+
+            if (typeof(IFormFileCollection).IsAssignableFrom(type))
+            {
+                return FormParameterKind.FileCollection;
+            }
+
             var element = JsonSchemaGenerator.GetEnumerableElementType(type);
-            if (element != null)
+            if (element != null && typeof(IFormFile).IsAssignableFrom(element))
             {
-                candidates.Add(element);
+                return FormParameterKind.FileCollection;
             }
 
-            foreach (var candidate in candidates)
+            if (typeof(IFormCollection).IsAssignableFrom(type))
             {
-                var name = candidate.FullName;
-                if (name != null && Array.IndexOf(FormParameterTypeNames, name) >= 0)
-                {
-                    return true;
-                }
+                return FormParameterKind.FormCollection;
+            }
 
-                foreach (var @interface in candidate.GetInterfaces())
+            return FormParameterKind.None;
+        }
+
+        /// <summary>
+        /// The schema advertised for a file argument. The caller supplies the content base64-encoded;
+        /// the binder turns it into a part of a multipart/form-data body, which the action's own model
+        /// binding reads back as an <see cref="IFormFile"/>.
+        /// </summary>
+        internal static JsonObject BuildFileSchema()
+        {
+            return new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
                 {
-                    if (@interface.FullName != null && Array.IndexOf(FormParameterTypeNames, @interface.FullName) >= 0)
+                    ["data"] = new JsonObject
                     {
-                        return true;
-                    }
-                }
-            }
+                        ["type"] = "string",
+                        ["contentEncoding"] = "base64",
+                        ["description"] = "The file content, base64-encoded.",
+                    },
+                    ["fileName"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "The file name reported to the endpoint.",
+                    },
+                    ["contentType"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "The MIME type of the content. Defaults to application/octet-stream.",
+                    },
+                },
+                ["required"] = new JsonArray("data"),
+            };
+        }
 
-            return false;
+        /// <summary>The file schema, or an array of it for a collection-of-files parameter.</summary>
+        internal static JsonObject BuildFileArgumentSchema(bool isCollection)
+        {
+            var schema = BuildFileSchema();
+            return isCollection
+                ? new JsonObject { ["type"] = "array", ["items"] = schema }
+                : schema;
+        }
+
+        /// <summary>The schema advertised for a whole-form argument (<see cref="IFormCollection"/>).</summary>
+        internal static JsonObject BuildFormCollectionSchema()
+        {
+            return new JsonObject
+            {
+                ["type"] = "object",
+                ["description"] = "Form fields as name/value pairs. Array values repeat the field.",
+                ["additionalProperties"] = new JsonObject(),
+            };
         }
     }
 }

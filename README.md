@@ -41,6 +41,7 @@ app.MapGet("/customers/{id}", (int id) => ...)
 - [Minimal APIs](#minimal-apis)
 - [One action, several tools](#one-action-several-tools)
 - [How arguments are mapped](#how-arguments-are-mapped)
+- [File uploads](#file-uploads)
 - [Schema generation](#schema-generation)
 - [Authentication and authorization](#authentication-and-authorization)
 - [Configuration](#configuration)
@@ -218,6 +219,10 @@ Inputs are inferred with Minimal API binding rules, not MVC's:
 | `string`, primitives, parsables, and collections of them; `[FromQuery]` | A query-string entry. |
 | Complex types (and collections of them), `[FromBody]` | The JSON request body, [flattened](#how-arguments-are-mapped) like `[FromBody]`. |
 | `[FromHeader]` | A request header (opt in with `ExposeHeaderParameters`). |
+| `IFormFile`, `IFormFileCollection`, collections of `IFormFile` | A [base64 file argument](#file-uploads), replayed as a multipart/form-data part. |
+| `[FromForm]` | A form field; complex form models are flattened like `[FromBody]`. |
+| `IFormCollection` | A free-form object whose properties become form fields. |
+| `[AsParameters]` complex models | Expanded member by member, each with these same rules. |
 | Services (per `IServiceProviderIsService`), `[FromServices]`, `[FromKeyedServices]` | Skipped - resolved by the framework. |
 | `HttpContext`, `CancellationToken`, `ClaimsPrincipal`, `Stream`, `PipeReader`, `BindAsync` types | Skipped - materialized from the request itself. |
 
@@ -242,9 +247,17 @@ method name when it is a real method rather than a lambda, or the verb and route
 `GET /customers/{id}` becomes `customers_get_by_id`. `NabuMcpOptions.ToolNameFactory` sees these
 through the same `McpToolNamingContext` it sees controllers through.
 
-Current limitations: `[AsParameters]` models and form/`IFormFile` binding are not supported - such
-endpoints are skipped with a warning. Minimal API discovery needs endpoint routing, so it exists on
-the modern targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x.
+`[AsParameters]` surface types are expanded member by member - constructor parameters and settable
+properties each get the same binding inference they would as a top-level handler parameter, so a
+record gathering a route token, a query filter and a paging default publishes exactly the schema the
+individual parameters would have. Form binding - `IFormFile` included - works as it does for
+controllers; see [File uploads and form data](#file-uploads).
+
+One current limitation: Minimal API discovery needs endpoint routing, so it exists on the modern
+targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x. On .NET 8+ remember that form
+endpoints demand antiforgery by default - a tool call cannot carry an antiforgery token, so such
+endpoints need `.DisableAntiforgery()` (or the app's `UseAntiforgery()` setup) exactly as any
+non-browser client does.
 
 ## One action, several tools
 
@@ -322,6 +335,8 @@ Nabu reads MVC's own binding metadata, so it maps arguments the same way your AP
 | `[FromQuery]` | A query-string entry. Arrays repeat the key; objects use `key.property`. |
 | `[FromBody]` | The JSON request body. |
 | `[FromHeader]` | A request header (opt in with `ExposeHeaderParameters`). |
+| `[FromForm]` | A form field in the request body; complex form models are flattened. |
+| `IFormFile`, `IFormFileCollection` | A [base64 file argument](#file-uploads), sent as a multipart part. |
 | `[FromServices]`, `CancellationToken`, `HttpContext` | Skipped - resolved by the framework. |
 
 When no explicit attribute is present, Nabu infers the source exactly as `[ApiController]` does: route
@@ -339,6 +354,40 @@ public ActionResult<TodoItem> Create([FromBody] CreateTodoRequest request)
 
 Set `FlattenBodyParameter = false` to keep the wrapper. Types that are not objects - a `[FromBody]
 int[]`, for example - are always sent as the whole body under their parameter name.
+
+## File uploads
+
+An action that binds `IFormFile`, a collection of files, `[FromForm]` fields or an
+`IFormCollection` is published like any other. A file becomes a tool argument carrying the content
+as base64:
+
+```jsonc
+// upload_document arguments
+{
+  "title": "Quarterly report",
+  "file": {
+    "data": "JVBERi0xLjcK...",          // required - the content, base64-encoded
+    "fileName": "report.pdf",           // optional - defaults to the parameter name
+    "contentType": "application/pdf"    // optional - defaults to application/octet-stream
+  }
+}
+```
+
+At invocation time Nabu decodes the content and rebuilds the request the way a browser would have
+sent it - `multipart/form-data` when a file is present, `application/x-www-form-urlencoded` when the
+form carries only fields - so the action's own model binding, `[Required]` validation and size
+limits (`RequestSizeLimit`, `FormOptions`) all apply unchanged. A bare base64 string is accepted as
+a shorthand for the object form. Complex `[FromForm]` models are flattened into the tool schema the
+same way `[FromBody]` models are, and a file-typed property inside one stays a file argument.
+
+Two things to know:
+
+- File content travels base64-encoded inside the JSON-RPC request, so it is subject to whatever
+  body-size limit the MCP endpoint itself is under; tools are a fit for documents and images, not
+  multi-gigabyte payloads.
+- On .NET 8+ Minimal APIs, form-binding endpoints require antiforgery by default. A tool call cannot
+  carry an antiforgery token - configure such endpoints the way you would for any non-browser
+  client, typically `.DisableAntiforgery()` on the endpoint.
 
 ## Schema generation
 
@@ -736,8 +785,9 @@ The workflow can also be started manually from the Actions tab with an explicit 
   server features, WebSockets, response upgrade, raw transport access and some IIS/Kestrel-specific
   features do not exist on a replayed request. Middleware that requires them will behave as it does
   when those features are absent.
-- Actions binding `IFormFile` or form data are skipped, with a warning; tools cannot supply files.
-  For Minimal APIs, `[AsParameters]` models are skipped the same way.
+- File content reaches a tool base64-encoded inside the JSON-RPC body, so uploads are bounded by the
+  MCP endpoint's own request-size limits - fine for documents and images, wrong for very large
+  payloads. See [File uploads](#file-uploads).
 - Attribute routing is what discovery is built around. Conventionally routed actions fall back to a
   `{controller}/{action}` path with the remaining arguments in the query string.
 - The server is stateless: no server-initiated notifications, no `listChanged`, no resumable streams.

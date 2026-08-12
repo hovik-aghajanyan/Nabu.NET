@@ -19,6 +19,12 @@ namespace Nabu.Mcp.AspNetCore.Discovery
 
         /// <summary>Sent as a request header.</summary>
         Header,
+
+        /// <summary>Sent as a form field in the request body.</summary>
+        Form,
+
+        /// <summary>Sent as a file part of a multipart/form-data request body.</summary>
+        FormFile,
     }
 
     /// <summary>A single input of a tool, and how it maps back onto the action's binding sources.</summary>

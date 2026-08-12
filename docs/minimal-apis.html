@@ -117,11 +117,22 @@ app.MapPost("/orders", (CreateOrder order) =&gt; ...)
       <code>McpToolNamingContext</code> it sees controllers through.
     </p>
 
+    <h2 id="forms-and-asparameters">Forms and [AsParameters]</h2>
+    <p>
+      <code>[AsParameters]</code> surface types are expanded member by member — constructor parameters
+      and settable properties each get the same binding inference they would as a top-level handler
+      parameter. Form binding works too: an <code>IFormFile</code> becomes a tool argument carrying the
+      content as base64 (<code>data</code>, plus optional <code>fileName</code> and
+      <code>contentType</code>), and the invoker replays it as a real multipart/form-data request, so
+      the endpoint's own form binding, validation and size limits apply unchanged. On .NET 8+, form
+      endpoints demand antiforgery by default — a tool call cannot carry an antiforgery token, so such
+      endpoints need <code>.DisableAntiforgery()</code> exactly as any non-browser client does.
+    </p>
+
     <h2 id="limitations">Current limitations</h2>
     <div class="note">
-      <code>[AsParameters]</code> models and form/<code>IFormFile</code> binding are not supported —
-      such endpoints are skipped with a warning. Minimal API discovery needs endpoint routing, so it
-      exists on the modern targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x.
+      Minimal API discovery needs endpoint routing, so it exists on the modern targets only, not on
+      the netstandard2.0 asset for ASP.NET Core 2.x.
     </div>
 
     <div class="pager">

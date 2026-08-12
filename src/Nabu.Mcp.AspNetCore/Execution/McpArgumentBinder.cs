@@ -19,6 +19,19 @@ namespace Nabu.Mcp.AspNetCore.Execution
 
             public JsonNode? Body { get; set; }
 
+            /// <summary>
+            /// True when the target endpoint binds form data. The request body is then built from
+            /// <see cref="FormFields"/> and <see cref="FormFiles"/> - multipart/form-data when a file
+            /// is present, application/x-www-form-urlencoded otherwise - and <see cref="Body"/> is ignored.
+            /// </summary>
+            public bool IsForm { get; set; }
+
+            /// <summary>Form fields, in write order. A repeated key sends the field several times.</summary>
+            public IList<KeyValuePair<string, string>> FormFields { get; } = new List<KeyValuePair<string, string>>();
+
+            /// <summary>Decoded file parts for the multipart/form-data body.</summary>
+            public IList<McpFormFilePart> FormFiles { get; } = new List<McpFormFilePart>();
+
             public IDictionary<string, string> Headers { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             /// <summary>
@@ -28,6 +41,27 @@ namespace Nabu.Mcp.AspNetCore.Execution
             public ISet<string> ConstantHeaders { get; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
+        /// <summary>One file of a multipart/form-data request, decoded from a tool argument.</summary>
+        public sealed class McpFormFilePart
+        {
+            public McpFormFilePart(string name, string fileName, string contentType, byte[] content)
+            {
+                Name = name;
+                FileName = fileName;
+                ContentType = contentType;
+                Content = content;
+            }
+
+            /// <summary>The form field name the action's model binding looks for.</summary>
+            public string Name { get; }
+
+            public string FileName { get; }
+
+            public string ContentType { get; }
+
+            public byte[] Content { get; }
+        }
+
         public static BoundRequest Bind(McpToolDescriptor tool, JsonObject? arguments, Schema.McpJsonCompatibility compatibility)
         {
             var result = new BoundRequest();
@@ -35,6 +69,27 @@ namespace Nabu.Mcp.AspNetCore.Execution
             var query = new List<KeyValuePair<string, string>>();
             JsonObject? bodyObject = null;
             JsonNode? bodyRoot = null;
+
+            foreach (var parameter in tool.Parameters)
+            {
+                if (parameter.Source == McpParameterSource.Form || parameter.Source == McpParameterSource.FormFile)
+                {
+                    result.IsForm = true;
+                    break;
+                }
+            }
+
+            if (!result.IsForm)
+            {
+                foreach (var constant in tool.Constants)
+                {
+                    if (constant.Source == McpParameterSource.Form || constant.Source == McpParameterSource.FormFile)
+                    {
+                        result.IsForm = true;
+                        break;
+                    }
+                }
+            }
 
             foreach (var parameter in tool.Parameters)
             {
@@ -146,6 +201,56 @@ namespace Nabu.Mcp.AspNetCore.Execution
                         }
 
                         break;
+
+                    case McpParameterSource.Form:
+                        if (isBodyRoot)
+                        {
+                            // The argument is the whole form (IFormCollection): every property of the
+                            // supplied object becomes a field of its own.
+                            if (value is JsonObject formRoot)
+                            {
+                                foreach (var property in formRoot)
+                                {
+                                    if (replaceExisting)
+                                    {
+                                        RemoveFields(result.FormFields, property.Key);
+                                    }
+
+                                    AppendQuery(result.FormFields, property.Key, property.Value);
+                                }
+                            }
+                            else if (value != null)
+                            {
+                                throw new McpArgumentException(
+                                    "Argument '" + bindingName + "' for tool '" + tool.Name + "' must be an object of form fields.");
+                            }
+                        }
+                        else
+                        {
+                            if (replaceExisting)
+                            {
+                                RemoveFields(result.FormFields, bindingName);
+                            }
+
+                            AppendQuery(result.FormFields, bindingName, value);
+                        }
+
+                        break;
+
+                    case McpParameterSource.FormFile:
+                        if (replaceExisting)
+                        {
+                            for (var i = result.FormFiles.Count - 1; i >= 0; i--)
+                            {
+                                if (string.Equals(result.FormFiles[i].Name, bindingName, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    result.FormFiles.RemoveAt(i);
+                                }
+                            }
+                        }
+
+                        AppendFiles(result.FormFiles, tool.Name, bindingName, value);
+                        break;
                 }
             }
 
@@ -159,6 +264,101 @@ namespace Nabu.Mcp.AspNetCore.Execution
             result.Body = bodyRoot ?? bodyObject;
 
             return result;
+        }
+
+        private static void RemoveFields(IList<KeyValuePair<string, string>> fields, string key)
+        {
+            for (var i = fields.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(fields[i].Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    fields.RemoveAt(i);
+                }
+            }
+        }
+
+        private static void AppendFiles(ICollection<McpFormFilePart> files, string toolName, string name, JsonNode? value)
+        {
+            if (value == null)
+            {
+                return;
+            }
+
+            if (value is JsonArray array)
+            {
+                foreach (var item in array)
+                {
+                    if (item != null)
+                    {
+                        files.Add(ParseFilePart(toolName, name, item));
+                    }
+                }
+
+                return;
+            }
+
+            files.Add(ParseFilePart(toolName, name, value));
+        }
+
+        /// <summary>
+        /// Decodes one file argument: either an object carrying base64 <c>data</c> with an optional
+        /// <c>fileName</c> and <c>contentType</c>, or - leniently - a bare base64 string.
+        /// </summary>
+        private static McpFormFilePart ParseFilePart(string toolName, string name, JsonNode value)
+        {
+            string? data;
+            string? fileName = null;
+            string? contentType = null;
+
+            if (value is JsonObject obj)
+            {
+                data = StringProperty(obj, "data");
+                fileName = StringProperty(obj, "fileName");
+                contentType = StringProperty(obj, "contentType");
+
+                if (data == null)
+                {
+                    throw new McpArgumentException(
+                        "File argument '" + name + "' for tool '" + toolName + "' is missing its base64 'data' property.");
+                }
+            }
+            else if (value.GetValueKind() == JsonValueKind.String)
+            {
+                data = value.GetValue<string>();
+            }
+            else
+            {
+                throw new McpArgumentException(
+                    "File argument '" + name + "' for tool '" + toolName + "' must be an object with a base64 'data' property.");
+            }
+
+            byte[] content;
+            try
+            {
+                content = Convert.FromBase64String(data);
+            }
+            catch (FormatException)
+            {
+                throw new McpArgumentException(
+                    "File argument '" + name + "' for tool '" + toolName + "' does not contain valid base64 data.");
+            }
+
+            return new McpFormFilePart(
+                name,
+                string.IsNullOrEmpty(fileName) ? name : fileName!,
+                string.IsNullOrEmpty(contentType) ? "application/octet-stream" : contentType!,
+                content);
+        }
+
+        private static string? StringProperty(JsonObject obj, string name)
+        {
+            JsonNode? node;
+            if (!obj.TryGetPropertyValue(name, out node) || node == null)
+            {
+                return null;
+            }
+
+            return node.GetValueKind() == JsonValueKind.String ? node.GetValue<string>() : node.ToJsonString();
         }
 
         private static void AppendQuery(ICollection<KeyValuePair<string, string>> query, string key, JsonNode? value)
