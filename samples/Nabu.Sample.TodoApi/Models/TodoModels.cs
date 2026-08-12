@@ -43,6 +43,28 @@ namespace Nabu.Sample.TodoApi.Models
 
         /// <summary>When the item was created, in UTC.</summary>
         public DateTimeOffset CreatedAt { get; set; }
+
+        /// <summary>Files attached to the item.</summary>
+        public List<TodoAttachment> Attachments { get; set; } = new List<TodoAttachment>();
+    }
+
+    /// <summary>A file attached to a todo item. The sample stores metadata only, not the content.</summary>
+    public class TodoAttachment
+    {
+        /// <summary>Stable identifier of the attachment.</summary>
+        public Guid Id { get; set; }
+
+        /// <summary>Name of the uploaded file.</summary>
+        public string FileName { get; set; } = string.Empty;
+
+        /// <summary>MIME type of the uploaded file.</summary>
+        public string ContentType { get; set; } = string.Empty;
+
+        /// <summary>Size of the uploaded content, in bytes.</summary>
+        public long SizeBytes { get; set; }
+
+        /// <summary>Optional description supplied alongside the file.</summary>
+        public string? Description { get; set; }
     }
 
     /// <summary>Payload for creating a todo item.</summary>
