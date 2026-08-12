@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Getting Started with Nabu.NET — ASP.NET Core MCP Server in 4 Steps</title>
+  <meta name="description" content="Install Nabu.Mcp.AspNetCore, register it in Program.cs, mark controller actions with [McpTool], and call your new MCP server — a complete quickstart with curl examples and MCP Inspector.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/getting-started.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="Getting Started with Nabu.NET — ASP.NET Core MCP Server in 4 Steps">
+  <meta property="og:description" content="Install, register, annotate, call: a complete quickstart for exposing an existing ASP.NET Core Web API as a Model Context Protocol server.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/getting-started.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Getting started with Nabu.NET",
+    "description": "Quickstart for exposing an existing ASP.NET Core Web API as a Model Context Protocol (MCP) server with Nabu.Mcp.AspNetCore.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/getting-started.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "Getting started", "item": "https://hovik-aghajanyan.github.io/nabu.net/getting-started.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html" aria-current="page">Getting started</a>
+      <a href="attributes-and-tools.html">Attributes &amp; tools</a>
+      <a href="minimal-apis.html">Minimal APIs</a>
+      <a href="security.html">Security</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>Getting started</h1>
+    <p class="lede">Expose an existing ASP.NET Core Web API as a Model Context Protocol server in four steps:
+    reference the library, register it, mark the actions you want to publish, and talk to it.</p>
+
+    <h2 id="install">1. Reference the library</h2>
+    <p>From <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a>:</p>
+    <pre><code>dotnet add package Nabu.Mcp.AspNetCore</code></pre>
+    <p>Or as a project reference while working from source:</p>
+    <pre><code>&lt;ProjectReference Include="path/to/src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj" /&gt;</code></pre>
+
+    <h2 id="register">2. Register and mount it</h2>
+    <pre><code>var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddControllers();
+builder.Services.AddAuthentication(/* ... */);
+builder.Services.AddAuthorization(/* ... */);
+
+builder.Services.AddNabuMcp(options =&gt;
+{
+    options.ServerName = "my-api";
+    options.RequireAuthorization = true;   // protect the MCP endpoint itself
+});
+
+var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.UseNabuMcp();      // mount after authentication so the endpoint sees the caller
+app.MapControllers();
+
+app.Run();</code></pre>
+    <p>
+      <code>UseNabuMcp()</code> serves the MCP endpoint at <code>/mcp</code> by default. The route can be
+      changed either through <code>options.Path</code> or directly at the mount —
+      <code>app.UseNabuMcp("/agent/mcp")</code> — with the argument winning when both are set. Where you
+      place it only affects the MCP endpoint itself — tool calls always traverse the whole pipeline from
+      the top, regardless of position.
+    </p>
+
+    <h2 id="annotate">3. Mark the actions you want to publish</h2>
+    <pre><code>[ApiController]
+[Route("api/todos")]
+[Authorize]
+public class TodosController : ControllerBase
+{
+    /// &lt;summary&gt;Lists the todo items belonging to the signed-in user.&lt;/summary&gt;
+    /// &lt;param name="search"&gt;Case-insensitive substring matched against the title and notes.&lt;/param&gt;
+    [HttpGet]
+    [McpTool]
+    public ActionResult&lt;TodoPage&gt; List([FromQuery] string? search, [FromQuery] int page = 0) =&gt; ...
+}</code></pre>
+    <p>
+      That is the whole setup. The XML <code>&lt;summary&gt;</code> becomes the tool description and the
+      <code>&lt;param&gt;</code> text becomes the argument descriptions, so a well-documented API produces a
+      well-described tool set with no extra work. (Set
+      <code>&lt;GenerateDocumentationFile&gt;true&lt;/GenerateDocumentationFile&gt;</code> to enable it.)
+    </p>
+
+    <h2 id="call">4. Talk to it</h2>
+    <pre><code>curl -X POST http://localhost:5000/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</code></pre>
+    <p>Each published action is advertised with a generated schema and MCP behaviour annotations:</p>
+    <pre><code>{
+  "name": "todos_get_by_id",
+  "title": "Get By Id",
+  "description": "Fetches a single todo item by its identifier.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "format": "uuid", "description": "Identifier of the item." }
+    },
+    "required": ["id"]
+  },
+  "annotations": {
+    "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false
+  }
+}</code></pre>
+
+    <h2 id="sample">Run the sample application</h2>
+    <p>
+      The repository ships <code>samples/Nabu.Sample.TodoApi</code> — a working API with JWT bearer
+      authentication, a role-based policy, model validation and XML documentation. Two accounts exist,
+      both with the password <code>password</code>: <code>alice</code> (user) and <code>root</code>
+      (user + admin).
+    </p>
+    <pre><code>dotnet run --project samples/Nabu.Sample.TodoApi
+# then POST JSON-RPC to http://localhost:5000/mcp</code></pre>
+    <p>
+      It is wired up for per-caller tool visibility, so the ordinary authorization attributes are visible
+      at work: connect without a token and <code>tools/list</code> returns only the anonymous tools; sign
+      in as <code>alice</code> and the todo tools appear; only <code>root</code> sees
+      <code>todos_delete</code>, because it carries <code>[Authorize(Policy = "AdminOnly")]</code>.
+    </p>
+
+    <h2 id="inspector">Trying it with MCP Inspector</h2>
+    <p>
+      <code>docker-compose.yml</code> runs both samples together with the official
+      <a href="https://github.com/modelcontextprotocol/inspector" rel="noopener">MCP Inspector</a>,
+      preconfigured to demonstrate per-caller tool exposure on both protocol layers:
+    </p>
+    <pre><code>docker compose up --build
+# then open http://localhost:6274?MCP_INSPECTOR_API_TOKEN=nabu-local-dev</code></pre>
+    <p>
+      A one-shot init container signs in as <code>alice</code> and <code>root</code> on both samples and
+      writes an Inspector config with three connections per sample. Switching between
+      <code>todo-anonymous</code>, <code>todo-alice-user</code> and <code>todo-root-admin</code> in the UI
+      shows the tool list grow from 5 anonymous tools to alice's 11 to root's 12. The Todo API is
+      published on <code>http://localhost:5080/mcp</code> and the book catalog (served through the
+      official MCP SDK) on <code>http://localhost:5081/books/mcp</code>.
+    </p>
+    <p>The same comparison from the terminal, via the Inspector CLI:</p>
+    <pre><code>docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+  --server todo-anonymous --method tools/list
+docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
+  --server todo-root-admin --method tools/list</code></pre>
+    <div class="note">The demo tokens live for 24 hours; <code>docker compose up</code> again regenerates them.</div>
+
+    <h2 id="next">Next steps</h2>
+    <ul>
+      <li><a href="attributes-and-tools.html">Attributes &amp; tools</a> — the full attribute surface, publishing one action as several tools, argument mapping and schema generation.</li>
+      <li><a href="minimal-apis.html">Minimal APIs</a> — publishing route handlers with <code>.McpTool()</code>.</li>
+      <li><a href="security.html">Authentication &amp; security</a> — the two enforcement layers and the recommended production configuration.</li>
+      <li><a href="configuration.html">Configuration &amp; protocol</a> — every option on <code>NabuMcpOptions</code> and the supported protocol revisions.</li>
+    </ul>
+
+    <div class="pager">
+      <a href="./"><span class="dir">Previous</span>← Home</a>
+      <a href="attributes-and-tools.html"><span class="dir">Next</span>Attributes &amp; tools →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

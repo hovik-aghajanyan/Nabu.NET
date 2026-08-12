@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuration, Protocol Support &amp; Limitations — NabuMcpOptions Reference | Nabu.NET</title>
+  <meta name="description" content="Full NabuMcpOptions reference for Nabu.NET: every option and default, supported MCP protocol revisions (2026-07-28 and legacy), the official MCP C# SDK adapter, target frameworks and known limitations.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/configuration.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="Configuration, Protocol Support &amp; Limitations — NabuMcpOptions Reference">
+  <meta property="og:description" content="Every NabuMcpOptions option and default, supported MCP protocol revisions, the official MCP C# SDK adapter, target frameworks and limitations.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/configuration.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Nabu.NET configuration and protocol reference",
+    "description": "NabuMcpOptions reference, MCP protocol revision support, official MCP C# SDK adapter, target frameworks and limitations.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/configuration.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "Configuration & protocol", "item": "https://hovik-aghajanyan.github.io/nabu.net/configuration.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html">Getting started</a>
+      <a href="attributes-and-tools.html">Attributes &amp; tools</a>
+      <a href="minimal-apis.html">Minimal APIs</a>
+      <a href="security.html">Security</a>
+      <a href="configuration.html" aria-current="page">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>Configuration &amp; protocol</h1>
+    <p class="lede">Every option lives on <code>NabuMcpOptions</code>. This page also covers the supported
+    MCP protocol revisions, the official SDK adapter, target frameworks and known limitations.</p>
+
+    <h2 id="options">Options reference</h2>
+    <table>
+      <thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>Path</code></td><td><code>/mcp</code></td><td>Endpoint path.</td></tr>
+        <tr><td><code>ServerName</code>, <code>ServerVersion</code>, <code>Instructions</code></td><td>entry assembly</td><td>Reported during <code>initialize</code> / <code>server/discover</code>.</td></tr>
+        <tr><td><code>CacheTtlMilliseconds</code></td><td><code>60000</code></td><td><code>ttlMs</code> freshness hint on cacheable <code>2026-07-28</code> results.</td></tr>
+        <tr><td><code>ExposeAllActions</code></td><td><code>false</code></td><td>Publish every action and route handler, not just annotated ones. <code>[McpIgnore]</code> still wins.</td></tr>
+        <tr><td><code>RequireAuthorization</code>, <code>AuthorizationPolicy</code>, <code>AuthenticationSchemes</code></td><td>off</td><td>Protects the MCP endpoint.</td></tr>
+        <tr><td><code>ToolVisibility</code></td><td><code>All</code></td><td>Advertise every tool, or only the ones the caller is authenticated / authorized for.</td></tr>
+        <tr><td><code>AnonymousAccess</code></td><td><code>None</code></td><td>How much of a protected endpoint an unauthorized caller may reach.</td></tr>
+        <tr><td><code>ToolNameFactory</code></td><td><code>controller_action</code> snake_case</td><td>Builds tool names.</td></tr>
+        <tr><td><code>ToolFilter</code></td><td>none</td><td>Last-chance predicate to drop discovered tools.</td></tr>
+        <tr><td><code>FlattenBodyParameter</code></td><td><code>true</code></td><td>Lift <code>[FromBody]</code> model properties to the top level.</td></tr>
+        <tr><td><code>ExposeHeaderParameters</code></td><td><code>false</code></td><td>Publish <code>[FromHeader]</code> parameters as tool inputs.</td></tr>
+        <tr><td><code>ForwardedHeaders</code>, <code>ForwardedHeaderPrefixes</code></td><td>credentials + tracing</td><td>Headers copied onto tool requests.</td></tr>
+        <tr><td><code>ProtectedHeaders</code></td><td>credentials + proxy metadata</td><td>Headers a model-supplied argument may never override.</td></tr>
+        <tr><td><code>PropagateUser</code></td><td><code>true</code></td><td>Seed the caller's principal onto the synthetic request.</td></tr>
+        <tr><td><code>MaxResponseBytes</code></td><td>1 MiB</td><td>Cap on the buffered response body; bounds memory, larger bodies are truncated and flagged.</td></tr>
+        <tr><td><code>IncludeStructuredContent</code></td><td><code>true</code></td><td>Emit JSON responses as MCP <code>structuredContent</code>.</td></tr>
+        <tr><td><code>TreatErrorStatusAsToolError</code></td><td><code>true</code></td><td>Map HTTP &gt;= 400 to <code>isError: true</code>.</td></tr>
+        <tr><td><code>MaxSchemaDepth</code></td><td><code>8</code></td><td>Nesting limit for generated schemas.</td></tr>
+        <tr><td><code>UseXmlDocumentation</code></td><td><code>true</code></td><td>Read <code>&lt;summary&gt;</code>/<code>&lt;param&gt;</code> from the XML docs file.</td></tr>
+        <tr><td><code>StringEnumsInRequestBody</code></td><td>auto-detect</td><td>Whether the API accepts enum names in JSON bodies.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="protocol">Protocol support</h2>
+    <p>
+      Streamable HTTP transport, JSON-RPC 2.0. The server is dual-era: it speaks the stateless revision
+      <code>2026-07-28</code> (version and capabilities declared in <code>_meta</code> on every request,
+      no handshake, no sessions) and the legacy revisions <code>2025-06-18</code>,
+      <code>2025-03-26</code> and <code>2024-11-05</code> (negotiated at <code>initialize</code>). A
+      request that declares a protocol version in <code>_meta</code> — or calls
+      <code>server/discover</code> — is served under <code>2026-07-28</code> semantics; everything else
+      stays on the legacy path, so existing clients are unaffected.
+    </p>
+    <p>
+      On the <code>2026-07-28</code> path the mirrored request headers
+      (<code>MCP-Protocol-Version</code>, <code>Mcp-Method</code>, <code>Mcp-Name</code>) are validated
+      against the body (<code>-32020</code> on mismatch), an unsupported version is answered with
+      <code>-32022</code> and the supported list, results carry <code>resultType</code>, the server's
+      identity in <code>_meta</code>, and <code>ttlMs</code>/<code>cacheScope</code> on cacheable
+      results, and no session id is ever minted.
+    </p>
+    <table>
+      <thead><tr><th>Method</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><code>server/discover</code></td><td>(<code>2026-07-28</code>) Supported versions, capabilities, identity and instructions.</td></tr>
+        <tr><td><code>initialize</code></td><td>(legacy) Negotiates the version, advertises the <code>tools</code> capability, returns a session id.</td></tr>
+        <tr><td><code>tools/list</code></td><td>Every discovered tool with its schema and annotations.</td></tr>
+        <tr><td><code>tools/call</code></td><td>Replays the action; returns text content, <code>structuredContent</code>, and <code>isError</code>.</td></tr>
+        <tr><td><code>ping</code></td><td>(legacy) Answered with an empty result.</td></tr>
+        <tr><td><code>notifications/*</code></td><td>Accepted with <code>202</code> and no body.</td></tr>
+        <tr><td><code>resources/list</code>, <code>resources/templates/list</code>, <code>prompts/list</code></td><td>Answered as empty for client compatibility.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <code>POST</code> returns <code>application/json</code>, or a single server-sent event when the
+      client accepts only <code>text/event-stream</code>. Batched arrays are supported on the legacy
+      path. <code>DELETE</code> ends a legacy session (the server is stateless, so this is a no-op).
+      <code>GET</code> returns <code>405</code>.
+    </p>
+    <p>
+      Failures are reported at the right layer: a bad tool name or a missing required argument is a
+      JSON-RPC error (<code>-32602</code>), while an HTTP error from the action — 400 from validation,
+      403 from a policy, 404 from the action — is a successful JSON-RPC response carrying
+      <code>isError: true</code>, which is what lets a model read and react to it.
+    </p>
+
+    <h2 id="official-sdk">Using the official MCP SDK as the protocol layer</h2>
+    <p>
+      Nabu's value is the ASP.NET Core bridge — controller discovery, schema generation,
+      authorization-aware visibility and pipeline replay — not the JSON-RPC plumbing. The protocol layer
+      is therefore replaceable. The <code>Nabu.Mcp.ModelContextProtocol</code> package serves Nabu's
+      tools through the official
+      <a href="https://github.com/modelcontextprotocol/csharp-sdk" rel="noopener">ModelContextProtocol C# SDK</a>
+      instead of the built-in layer:
+    </p>
+    <pre><code>services.AddNabuMcp(options =&gt; { ... })
+        .UseOfficialMcpProtocol();
+
+app.UseNabuMcp(); // now mounts the official SDK's Streamable HTTP endpoint at the same path</code></pre>
+    <p>
+      The SDK owns the wire protocol — transport, protocol revisions, sessions — and Nabu answers
+      <code>tools/list</code> and <code>tools/call</code> behind it, with the same visibility rules and
+      pipeline replay as the built-in layer. The transport defaults to the SDK's stateless mode, matching
+      Nabu's design; pass a configuration delegate to change that or any other transport option:
+    </p>
+    <pre><code>services.AddNabuMcp().UseOfficialMcpProtocol(transport =&gt; transport.Stateless = false);</code></pre>
+    <p>
+      Choose the built-in layer for netstandard2.0/ASP.NET Core 2.x compatibility and zero extra
+      dependencies; choose the official layer (net8.0+) to track the protocol at the SDK's pace and pick
+      up its transport features. <code>RequireAuthorization</code> is honoured on the mapped endpoint;
+      the partial <code>AnonymousAccess</code> modes leave the endpoint anonymous and rely on the
+      replayed pipeline to authorize each call.
+    </p>
+    <p>
+      <code>samples/Nabu.Sample.OfficialSdk</code> is a complete runnable example: a small book-catalog
+      API published through the official SDK on a custom route
+      (<code>app.UseNabuMcp("/books/mcp")</code>), with the same JWT setup and per-caller tool exposure
+      as the Todo sample — showing that the authorization story is identical on both protocol layers.
+    </p>
+
+    <h2 id="target-frameworks">Target frameworks</h2>
+    <p>The library multi-targets <code>netstandard2.0</code>, <code>net8.0</code> and <code>net10.0</code>:</p>
+    <ul>
+      <li><strong>netstandard2.0</strong> builds against the ASP.NET Core 2.x packages, so ASP.NET Core 2.1/2.2 apps can use it.</li>
+      <li><strong>net8.0</strong> and <strong>net10.0</strong> bind to the shared framework, so modern apps pull in no legacy assemblies.</li>
+    </ul>
+    <p>
+      Version-specific APIs are handled at runtime rather than by feature-flagging behaviour: the HTTP
+      verb is read through <code>IActionHttpMethodProvider</code>, which has been stable since 1.0, and
+      the enum representation is detected reflectively so the same code path serves System.Text.Json and
+      Newtonsoft.Json.
+    </p>
+
+    <h2 id="limitations">Limitations</h2>
+    <ul>
+      <li>The synthetic request reproduces the HTTP application surface, not the server transport.
+        Standard request/response semantics, connection information, request services, cancellation and
+        identity are all present, but server-level features are not: TLS and client-certificate features,
+        HTTP/2-specific server features, WebSockets, response upgrade, raw transport access and some
+        IIS/Kestrel-specific features do not exist on a replayed request. Middleware that requires them
+        will behave as it does when those features are absent.</li>
+      <li>Actions binding <code>IFormFile</code> or form data are skipped, with a warning; tools cannot
+        supply files. For Minimal APIs, <code>[AsParameters]</code> models are skipped the same way.</li>
+      <li>Attribute routing is what discovery is built around. Conventionally routed actions fall back to
+        a <code>{controller}/{action}</code> path with the remaining arguments in the query string.</li>
+      <li>The server is stateless: no server-initiated notifications, no <code>listChanged</code>, no
+        resumable streams.</li>
+      <li>Overloaded actions that generate the same tool name are disambiguated with a numeric suffix and
+        a warning; give them explicit <code>[McpTool(Name = "...")]</code> names instead.</li>
+    </ul>
+
+    <h2 id="releasing">Releasing</h2>
+    <p>
+      Publishing to <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">nuget.org</a>
+      is driven by tags — the tag is the single source of truth for the package version:
+    </p>
+    <pre><code>git tag v1.2.3
+git push origin v1.2.3</code></pre>
+    <p>
+      GitHub Actions then restores, builds, tests, packs at <code>1.2.3</code>, pushes the
+      <code>.nupkg</code> and its <code>.snupkg</code> symbol package to nuget.org via
+      <a href="https://learn.microsoft.com/nuget/nuget-org/trusted-publishing" rel="noopener">NuGet Trusted Publishing</a>
+      (no API key to store), and opens a GitHub release with generated notes. A tag containing a hyphen
+      (<code>v1.2.3-rc.1</code>) is published as a prerelease.
+    </p>
+
+    <div class="pager">
+      <a href="security.html"><span class="dir">Previous</span>← Authentication &amp; security</a>
+      <a href="./"><span class="dir">Next</span>Home →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Minimal APIs — Publish Route Handlers as MCP Tools with .McpTool() | Nabu.NET</title>
+  <meta name="description" content="Publish ASP.NET Core Minimal API route handlers as Model Context Protocol tools with the .McpTool() endpoint convention. Minimal API binding rules, tool naming, and authorization all preserved.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/minimal-apis.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="Minimal APIs — Publish Route Handlers as MCP Tools with .McpTool()">
+  <meta property="og:description" content="Publish ASP.NET Core Minimal API route handlers as MCP tools with the .McpTool() endpoint convention — binding rules, naming and authorization preserved.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/minimal-apis.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Publishing Minimal APIs as MCP tools with Nabu.NET",
+    "description": "How the .McpTool() endpoint convention publishes ASP.NET Core Minimal API route handlers as Model Context Protocol tools.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/minimal-apis.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "Minimal APIs", "item": "https://hovik-aghajanyan.github.io/nabu.net/minimal-apis.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html">Getting started</a>
+      <a href="attributes-and-tools.html">Attributes &amp; tools</a>
+      <a href="minimal-apis.html" aria-current="page">Minimal APIs</a>
+      <a href="security.html">Security</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>Minimal APIs</h1>
+    <p class="lede">Route handlers publish the same way controller actions do, through an endpoint
+    convention instead of an attribute.</p>
+
+    <pre><code>app.MapGet("/customers/{id}", (int id, ICustomerService customers) =&gt; customers.Get(id))
+   .McpTool();
+
+app.MapPost("/orders", (CreateOrder order) =&gt; ...)
+   .McpTool("orders_create", "Places a new order.");</code></pre>
+    <p>
+      Everything works exactly as it does for controllers, because the machinery is the same: a tool call
+      is replayed as a synthetic HTTP request through the whole pipeline, so
+      <code>RequireAuthorization()</code>, <code>[Authorize]</code>, endpoint filters, rate limiting and
+      validation all keep running, and <code>ToolVisibility</code> reads the endpoint's own authorization
+      metadata when tailoring <code>tools/list</code> to the caller. An application without any
+      controllers at all — <code>AddNabuMcp()</code> plus <code>UseNabuMcp()</code> on a plain
+      <code>WebApplication</code> — is fully supported.
+    </p>
+
+    <h2 id="binding">How inputs are inferred</h2>
+    <p>Inputs are inferred with Minimal API binding rules, not MVC's:</p>
+    <table>
+      <thead><tr><th>Handler parameter</th><th>Becomes</th></tr></thead>
+      <tbody>
+        <tr><td>Route token match, <code>[FromRoute]</code></td><td>A URL segment.</td></tr>
+        <tr><td><code>string</code>, primitives, parsables, and collections of them; <code>[FromQuery]</code></td><td>A query-string entry.</td></tr>
+        <tr><td>Complex types (and collections of them), <code>[FromBody]</code></td><td>The JSON request body, <a href="attributes-and-tools.html#body-flattening">flattened</a> like <code>[FromBody]</code>.</td></tr>
+        <tr><td><code>[FromHeader]</code></td><td>A request header (opt in with <code>ExposeHeaderParameters</code>).</td></tr>
+        <tr><td>Services (per <code>IServiceProviderIsService</code>), <code>[FromServices]</code>, <code>[FromKeyedServices]</code></td><td>Skipped — resolved by the framework.</td></tr>
+        <tr><td><code>HttpContext</code>, <code>CancellationToken</code>, <code>ClaimsPrincipal</code>, <code>Stream</code>, <code>PipeReader</code>, <code>BindAsync</code> types</td><td>Skipped — materialized from the request itself.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      One real difference between the stacks is preserved rather than papered over: Minimal APIs answer
+      400 when a non-nullable parameter without a default value is missing, so such a parameter is
+      <code>required</code> in the tool schema — where MVC model binding would have silently used the
+      type's default.
+    </p>
+
+    <h2 id="surfaces">The other [McpTool] surfaces work here too</h2>
+    <ul>
+      <li><code>.McpTool(tool =&gt; { ... })</code> exposes the full attribute surface —
+        <code>IncludeParameters</code>, <code>ConstantParameters</code>, behaviour hints — and calling
+        <code>.McpTool(...)</code> repeatedly publishes
+        <a href="attributes-and-tools.html#one-action-several-tools">several tools over one endpoint</a>.</li>
+      <li>An attribute on the handler itself is equivalent to the extension:
+        <code>app.MapGet("/ping", [McpTool("ping")] () =&gt; ...)</code>.</li>
+      <li><code>.McpIgnore()</code> (or <code>[McpIgnore]</code> on the handler) keeps an endpoint out of
+        discovery, which matters when <code>ExposeAllActions</code> is on — that option publishes every
+        delegate route handler just as it publishes every controller action, and
+        <code>ExcludeFromDescription()</code> is respected the way
+        <code>[ApiExplorerSettings(IgnoreApi = true)]</code> is for controllers.</li>
+    </ul>
+
+    <h2 id="naming">Tool naming</h2>
+    <p>
+      Without an explicit name, tools are named from the endpoint name (<code>.WithName(...)</code>), the
+      handler's method name when it is a real method rather than a lambda, or the verb and route —
+      <code>GET /customers/{id}</code> becomes <code>customers_get_by_id</code>.
+      <code>NabuMcpOptions.ToolNameFactory</code> sees these through the same
+      <code>McpToolNamingContext</code> it sees controllers through.
+    </p>
+
+    <h2 id="limitations">Current limitations</h2>
+    <div class="note">
+      <code>[AsParameters]</code> models and form/<code>IFormFile</code> binding are not supported —
+      such endpoints are skipped with a warning. Minimal API discovery needs endpoint routing, so it
+      exists on the modern targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x.
+    </div>
+
+    <div class="pager">
+      <a href="attributes-and-tools.html"><span class="dir">Previous</span>← Attributes &amp; tools</a>
+      <a href="security.html"><span class="dir">Next</span>Authentication &amp; security →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

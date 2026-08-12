@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authentication &amp; Security — MCP Server Authorization in ASP.NET Core | Nabu.NET</title>
+  <meta name="description" content="How Nabu.NET enforces security on an ASP.NET Core MCP server: endpoint authorization, per-tool-call pipeline authorization, per-caller tool visibility, protected headers, and the recommended production configuration.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/security.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="Authentication &amp; Security — MCP Server Authorization in ASP.NET Core">
+  <meta property="og:description" content="Endpoint authorization, per-tool-call pipeline enforcement, per-caller tool visibility and protected headers in Nabu.NET.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/security.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Authentication and security in Nabu.NET",
+    "description": "The two independent authorization layers of a Nabu.NET MCP server, per-caller tool visibility, protected headers and production configuration.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/security.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "Authentication & security", "item": "https://hovik-aghajanyan.github.io/nabu.net/security.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html">Getting started</a>
+      <a href="attributes-and-tools.html">Attributes &amp; tools</a>
+      <a href="minimal-apis.html">Minimal APIs</a>
+      <a href="security.html" aria-current="page">Security</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>Authentication &amp; security</h1>
+    <p class="lede">There are two independent layers, and both are enforced: the MCP endpoint itself, and
+    every individual tool call replayed through your pipeline.</p>
+
+    <h2 id="two-layers">The two layers</h2>
+    <p>
+      <strong>The MCP endpoint.</strong> <code>RequireAuthorization = true</code> makes <code>/mcp</code>
+      itself require an authenticated caller, optionally against a named policy
+      (<code>AuthorizationPolicy</code>) and specific schemes (<code>AuthenticationSchemes</code>).
+      Unauthenticated callers get a challenge; authenticated ones without the policy get a forbid.
+    </p>
+    <p>
+      <strong>Each tool call.</strong> Because the synthetic request traverses the real pipeline, the
+      target action's own <code>[Authorize]</code>, policies, roles, claims and custom filters run
+      untouched. Nabu does not interpret, cache or shortcut them.
+    </p>
+
+    <h2 id="identity">How identity reaches the action</h2>
+    <p>Identity reaches the action two ways, which reinforce each other:</p>
+    <ol>
+      <li>Credentials-bearing headers (<code>Authorization</code>, <code>Cookie</code>, tracing headers,
+        and anything you add to <code>ForwardedHeaders</code> / <code>ForwardedHeaderPrefixes</code>) are
+        copied onto the synthetic request, so your authentication middleware re-authenticates it
+        normally.</li>
+      <li>The <code>ClaimsPrincipal</code> established for the MCP request is seeded onto the synthetic
+        context, so schemes whose credentials cannot be replayed from headers alone still work.
+        Authentication middleware overwrites it whenever the forwarded credentials authenticate
+        successfully. Disable with <code>PropagateUser = false</code>.</li>
+    </ol>
+    <p>
+      Hop-by-hop and content headers (<code>Content-Length</code>, <code>Transfer-Encoding</code>,
+      <code>Accept-Encoding</code>, <code>Host</code>, ...) are never forwarded; they are rebuilt for the
+      synthetic request.
+    </p>
+
+    <h2 id="protected-headers">Protected headers</h2>
+    <p>
+      A model-supplied argument can never override the headers that carry credentials or proxy metadata.
+      Even with <code>ExposeHeaderParameters</code> on, a tool argument that binds to a header in
+      <code>ProtectedHeaders</code> — by default <code>Authorization</code>, <code>Cookie</code>,
+      <code>Host</code>, <code>X-Forwarded-For</code>, <code>X-Forwarded-Proto</code> and
+      <code>X-Forwarded-Host</code> — is dropped with a warning, and the value forwarded from the MCP
+      caller stays in place. Constants pinned by the developer through <code>ConstantParameters</code>
+      are exempt, because they are developer input rather than model input. Removing a name from the set
+      is the explicit opt-in:
+    </p>
+    <pre><code>options.ProtectedHeaders.Remove("Authorization");   // only if you really mean it</code></pre>
+
+    <h2 id="production">Recommended production configuration</h2>
+    <p>
+      The defaults are tuned for a first run: the MCP endpoint is anonymous and every discovered tool is
+      advertised, while each invocation is still authorized by the application pipeline. That is never an
+      authorization bypass — a caller can at most see the names and schemas of tools it cannot invoke —
+      but for production deployments, lock the endpoint down and tailor the catalogue to the caller:
+    </p>
+    <pre><code>options.RequireAuthorization = true;                    // the endpoint itself challenges anonymous callers
+options.ToolVisibility = McpToolVisibility.Authorized;  // advertise only what the caller may actually invoke</code></pre>
+
+    <h2 id="tool-visibility">Advertising tools per caller</h2>
+    <p>
+      By default every discovered tool is advertised to everyone, and a caller that invokes one it is not
+      allowed to use gets the action's own 401 or 403 back as a tool error. That is safe, but it hands
+      the model a menu it cannot order from — and a client added before anyone has signed in sees the
+      whole catalogue.
+    </p>
+    <p><code>ToolVisibility</code> tailors <code>tools/list</code> to whoever is asking:</p>
+    <table>
+      <thead><tr><th>Value</th><th><code>tools/list</code> contains</th></tr></thead>
+      <tbody>
+        <tr><td><code>All</code> (default)</td><td>Every discovered tool, whoever is asking.</td></tr>
+        <tr><td><code>Authenticated</code></td><td>Tools whose actions need authorization, only once the caller is authenticated.</td></tr>
+        <tr><td><code>Authorized</code></td><td>Tools whose actions need authorization, only once the caller satisfies their policies.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      Nabu reads the requirement during discovery, from the <code>[Authorize]</code> and
+      <code>[AllowAnonymous]</code> metadata of the action, its controller and the filter collection, and
+      resolves it the way <code>AuthorizationMiddleware</code> would for a real request:
+    </p>
+    <ul>
+      <li><code>[AllowAnonymous]</code> on the action or the controller wins outright, exactly as it does in MVC.</li>
+      <li><code>[Authorize]</code> — with a policy, roles, or schemes — is combined into a single policy,
+        including a globally registered <code>AuthorizeFilter</code>.</li>
+      <li>An action carrying <strong>neither</strong> is not assumed to be public:
+        <code>AuthorizationOptions.FallbackPolicy</code> applies to it, so in a secure-by-default
+        application every action is protected until an <code>[AllowAnonymous]</code> opts it out, and
+        the tool list says the same.</li>
+    </ul>
+    <p>
+      The resolved policy is then evaluated against the caller with the application's own
+      <code>IAuthorizationPolicyProvider</code> and <code>IAuthorizationService</code>. An
+      unauthenticated caller is therefore shown only the tools that need no authorization; the rest
+      appear when it lists the tools again with credentials.
+    </p>
+    <p>
+      Nothing MCP-specific is involved: the attributes that already secure the API are the ones that
+      decide, so an action opts out of its controller's <code>[Authorize]</code> the same way it always
+      has.
+    </p>
+    <pre><code>[ApiController]
+[Route("api/todos")]
+[Authorize]                                 // the controller is protected...
+public class TodosController : ControllerBase
+{
+    /// &lt;summary&gt;Lists the priority levels a todo item can be given.&lt;/summary&gt;
+    [HttpGet("priorities")]
+    [AllowAnonymous]                        // ...and this one action is not
+    [McpTool]
+    public ActionResult&lt;IEnumerable&lt;string&gt;&gt; GetPriorities() =&gt; ...
+}</code></pre>
+    <p>
+      <code>todos_get_priorities</code> is advertised to, and callable by, a caller holding no token;
+      every other todo tool waits until it signs in.
+    </p>
+    <div class="note">
+      This decides what is <em>advertised</em>, never what is allowed. A hidden tool that gets called
+      anyway is still replayed through the pipeline and still refused by the action, so filtering can
+      never be the only thing standing between a caller and an endpoint. When the requirement cannot be
+      worked out — a custom filter Nabu cannot see, a missing authorization service — the tool stays
+      visible, because a spurious 403 is a better failure than a capability that silently disappeared.
+    </div>
+    <p>When authorization depends on something no attribute expresses, take the decision over entirely:</p>
+    <pre><code>services.AddSingleton&lt;IMcpToolAuthorizationEvaluator, MyEvaluator&gt;();</code></pre>
+
+    <h2 id="anonymous-access">Adding a client before it has credentials</h2>
+    <p>
+      <code>RequireAuthorization = true</code> makes <code>/mcp</code> itself reject anonymous callers,
+      which is what triggers the OAuth flow in MCP clients that support one — but it also means a client
+      cannot so much as initialize until credentials exist. <code>AnonymousAccess</code> opens a narrow
+      door in that gate:
+    </p>
+    <table>
+      <thead><tr><th>Value</th><th>An unauthorized caller may</th></tr></thead>
+      <tbody>
+        <tr><td><code>None</code> (default)</td><td>Nothing. Every request is challenged.</td></tr>
+        <tr><td><code>Discovery</code></td><td><code>initialize</code>, <code>ping</code> and the listing methods. <code>tools/call</code> is still challenged.</td></tr>
+        <tr><td><code>AnonymousTools</code></td><td>The above, plus <code>tools/call</code> for tools whose actions need no authorization.</td></tr>
+      </tbody>
+    </table>
+    <pre><code>options.RequireAuthorization = true;
+options.AnonymousAccess = McpAnonymousAccess.AnonymousTools;
+options.ToolVisibility = McpToolVisibility.Authorized;</code></pre>
+    <p>
+      Now a client added without credentials connects, lists the public tools and can use them;
+      everything else is a 401, which is exactly the signal a client needs to start authenticating; and
+      once it does, the next <code>tools/list</code> returns the full set it is entitled to. Pair the two
+      options as above — <code>AnonymousAccess</code> on its own would advertise tools the anonymous
+      caller cannot call.
+    </p>
+    <p>
+      The door is only open to callers that hold no credentials. One that presents a token which is
+      <em>rejected</em> is challenged as before, so an expired or malformed token is never quietly
+      downgraded to the anonymous tool list.
+    </p>
+    <div class="warning">
+      If the application sets <code>AuthorizationOptions.FallbackPolicy</code>, mount
+      <code>UseNabuMcp()</code> <strong>before</strong> <code>UseAuthorization()</code>. A fallback
+      policy applies to every request that matches no endpoint, and the MCP endpoint is middleware rather
+      than an endpoint, so authorization would otherwise challenge it before Nabu saw it —
+      <code>AnonymousAccess</code> included. Tool calls are unaffected either way: they traverse the
+      whole pipeline and meet the fallback policy at the action.
+    </div>
+    <p>
+      Because the server is stateless it cannot push <code>notifications/tools/list_changed</code>, so a
+      client that caches the tool list should re-list after authenticating.
+    </p>
+    <div class="warning">
+      Because the MCP endpoint hands one authenticated caller the ability to invoke every published
+      action, publish deliberately. <code>[McpTool]</code> is opt-in for exactly this reason, and
+      <code>[McpIgnore]</code> lets you keep an action reachable over HTTP while hiding it from MCP.
+    </div>
+
+    <div class="pager">
+      <a href="minimal-apis.html"><span class="dir">Previous</span>← Minimal APIs</a>
+      <a href="configuration.html"><span class="dir">Next</span>Configuration &amp; protocol →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

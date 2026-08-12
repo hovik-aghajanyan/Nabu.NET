@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attributes &amp; Tools — [McpTool], Argument Mapping and Schema Generation | Nabu.NET</title>
+  <meta name="description" content="The Nabu.NET attribute surface: [McpTool], [McpIgnore], [McpParameter], publishing one action as several MCP tools, how arguments map to route, query, body and headers, and JSON schema generation from CLR types.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/attributes-and-tools.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="Attributes &amp; Tools — [McpTool], Argument Mapping and Schema Generation">
+  <meta property="og:description" content="The full Nabu.NET attribute surface: publishing actions as MCP tools, shaping parameter sets, and generating JSON schemas from CLR types and XML docs.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/attributes-and-tools.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Nabu.NET attributes and tools",
+    "description": "Reference for [McpTool], [McpIgnore] and [McpParameter], multi-tool publishing, argument mapping and schema generation in Nabu.NET.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/attributes-and-tools.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "Attributes & tools", "item": "https://hovik-aghajanyan.github.io/nabu.net/attributes-and-tools.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html">Getting started</a>
+      <a href="attributes-and-tools.html" aria-current="page">Attributes &amp; tools</a>
+      <a href="minimal-apis.html">Minimal APIs</a>
+      <a href="security.html">Security</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>Attributes &amp; tools</h1>
+    <p class="lede">Four attributes cover the whole surface: publish, exclude, and shape individual inputs —
+    plus the ability to publish one action as several differently shaped tools.</p>
+
+    <h2 id="attributes">The attribute surface</h2>
+    <table>
+      <thead><tr><th>Attribute</th><th>Target</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>[McpTool]</code></td><td>action</td><td>Publishes the action as a tool. Repeatable — see <a href="#one-action-several-tools">One action, several tools</a>.</td></tr>
+        <tr><td><code>[McpTool]</code></td><td>controller</td><td>Publishes every action on the controller.</td></tr>
+        <tr><td><code>[McpIgnore]</code></td><td>controller, action, parameter, property</td><td>Excludes it. Always wins.</td></tr>
+        <tr><td><code>[McpParameter]</code></td><td>parameter, property</td><td>Overrides the name, description, requiredness or example of one input.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      For Minimal APIs the same declarations are made with the <code>.McpTool()</code> /
+      <code>.McpIgnore()</code> endpoint conventions (or the same attributes on the handler delegate) —
+      see <a href="minimal-apis.html">Minimal APIs</a>.
+    </p>
+    <p>
+      <code>[McpTool]</code> also accepts <code>Name</code>, <code>Title</code>, <code>Description</code>,
+      <code>Enabled</code>, and the four MCP behaviour hints <code>ReadOnly</code>, <code>Destructive</code>,
+      <code>Idempotent</code> and <code>OpenWorld</code>. The hints default to the HTTP semantics of the
+      verb — GET is read-only and idempotent, DELETE and PUT are destructive — and any hint you set
+      explicitly overrides that default.
+    </p>
+    <pre><code>[HttpPost("{id:guid}/publish")]
+[McpTool(
+    Name = "publish_article",
+    Description = "Publishes a draft article so it becomes visible to readers.",
+    Idempotent = false,
+    Destructive = true)]
+public IActionResult Publish(Guid id) =&gt; ...</code></pre>
+
+    <h2 id="one-action-several-tools">One action, several tools</h2>
+    <p>
+      A single endpoint is often the wrong shape for a model. <code>GET /api/todos</code> with five
+      optional filters is easy for a client that already knows what it wants and awkward for a model that
+      has to guess. Apply <code>[McpTool]</code> more than once and the same action is published as
+      several tools, each with its own name, description and parameter set — without adding controller
+      actions, and with the same pipeline replay behind every one of them.
+    </p>
+    <pre><code>[HttpGet]
+[McpTool]                                                       // the full endpoint, unchanged
+[McpTool("todos_list_open",
+    Title = "List open todos",
+    Description = "Lists the todo items that are still open.",
+    ExcludeParameters = new[] { "search", "priority" },
+    ConstantParameters = new[] { "isCompleted=false" })]
+[McpTool("todos_search",
+    Title = "Search todos",
+    Description = "Searches the signed-in user's todo items by title and notes.",
+    IncludeParameters = new[] { "search", "page", "pageSize" },
+    RequiredParameters = new[] { "search" })]
+public ActionResult&lt;TodoPage&gt; List(
+    [FromQuery] bool? isCompleted,
+    [FromQuery] TodoPriority? priority,
+    [FromQuery] string? search,
+    [FromQuery] int page = 0,
+    [FromQuery] int pageSize = 20) =&gt; ...</code></pre>
+    <p>
+      <code>tools/list</code> now advertises three tools over one action: <code>todos_list</code> takes
+      all five filters, <code>todos_list_open</code> takes only <code>page</code> and
+      <code>pageSize</code> and can never return completed items, and <code>todos_search</code> takes a
+      mandatory <code>search</code> plus paging.
+    </p>
+    <table>
+      <thead><tr><th>Property</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>IncludeParameters</code></td><td>Whitelist. Only these inputs are exposed; everything else is left unset.</td></tr>
+        <tr><td><code>ExcludeParameters</code></td><td>Hides inputs. They are left unset, so the action's own defaults apply.</td></tr>
+        <tr><td><code>ConstantParameters</code></td><td><code>name=value</code> pairs. The input disappears from the schema and the value is always sent.</td></tr>
+        <tr><td><code>RequiredParameters</code></td><td>Marks inputs required for this tool even if the action treats them as optional.</td></tr>
+        <tr><td><code>OptionalParameters</code></td><td>The reverse. Route tokens the URL cannot be built without stay required.</td></tr>
+      </tbody>
+    </table>
+    <h3 id="multi-tool-notes">Notes</h3>
+    <ul>
+      <li>Names match either the tool input name (camelCase, as it appears in the schema) or the
+        underlying binding name, case-insensitively. A name that matches nothing is logged as a warning.</li>
+      <li>Constant values are converted to the parameter's CLR type: <code>pageSize=100</code> becomes a
+        JSON number, <code>isCompleted=false</code> a JSON boolean, a complex parameter accepts a JSON
+        literal such as <code>tags=["docs","ops"]</code>, and everything else is sent as a string. On a
+        non-string parameter an empty value or <code>null</code> means "send nothing".</li>
+      <li>A constant always wins over an argument that happens to target the same place, so a pinned
+        value cannot be talked out of by the model.</li>
+      <li>Route tokens can be pinned too, which is how an endpoint collapses into a zero-argument tool:
+        <pre><code>[HttpGet("{city}")]
+[McpTool]
+[McpTool("weather_get_yerevan_week", ConstantParameters = new[] { "city=Yerevan", "days=7" })]
+public ActionResult&lt;IEnumerable&lt;Forecast&gt;&gt; GetForecast(string city, [FromQuery] int days = 3) =&gt; ...</code></pre>
+        Hiding a route token <em>without</em> pinning it would produce a tool whose URL cannot be built,
+        so Nabu logs a warning and skips that variant rather than publishing something uncallable.</li>
+      <li>Give every extra variant an explicit <code>Name</code>. Variants without one fall back to the
+        generated <code>controller_action</code> name and collide, and all but the first end up with a
+        <code>_2</code>, <code>_3</code>, ... suffix.</li>
+      <li>Variants declared on an action replace a controller-wide <code>[McpTool]</code> rather than
+        adding to it.</li>
+    </ul>
+
+    <h2 id="argument-mapping">How arguments are mapped</h2>
+    <p>Nabu reads MVC's own binding metadata, so it maps arguments the same way your API already binds them.</p>
+    <table>
+      <thead><tr><th>Binding source</th><th>Becomes</th></tr></thead>
+      <tbody>
+        <tr><td><code>[FromRoute]</code> / route template token</td><td>A URL segment, URL-encoded.</td></tr>
+        <tr><td><code>[FromQuery]</code></td><td>A query-string entry. Arrays repeat the key; objects use <code>key.property</code>.</td></tr>
+        <tr><td><code>[FromBody]</code></td><td>The JSON request body.</td></tr>
+        <tr><td><code>[FromHeader]</code></td><td>A request header (opt in with <code>ExposeHeaderParameters</code>).</td></tr>
+        <tr><td><code>[FromServices]</code>, <code>CancellationToken</code>, <code>HttpContext</code></td><td>Skipped — resolved by the framework.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      When no explicit attribute is present, Nabu infers the source exactly as <code>[ApiController]</code>
+      does: route tokens first, then body for complex types on POST/PUT/PATCH, then query string.
+    </p>
+    <h3 id="body-flattening">Body flattening</h3>
+    <p>
+      A single complex <code>[FromBody]</code> parameter is flattened into the top level of the tool
+      schema, so a model fills one flat object instead of a nested wrapper:
+    </p>
+    <pre><code>public ActionResult&lt;TodoItem&gt; Create([FromBody] CreateTodoRequest request)
+
+// arguments: {"title": "...", "priority": "High", "tags": ["a"]}   not  {"request": {...}}</code></pre>
+    <p>
+      Set <code>FlattenBodyParameter = false</code> to keep the wrapper. Types that are not objects — a
+      <code>[FromBody] int[]</code>, for example — are always sent as the whole body under their
+      parameter name.
+    </p>
+
+    <h2 id="schema-generation">Schema generation</h2>
+    <p>Input schemas are generated from the CLR types and honour:</p>
+    <ul>
+      <li>primitives, <code>Guid</code>, <code>DateTime</code>/<code>DateTimeOffset</code>/<code>DateOnly</code>/<code>TimeOnly</code>/<code>TimeSpan</code>, <code>Uri</code>, <code>byte[]</code></li>
+      <li><code>Nullable&lt;T&gt;</code> and nullable reference types (<code>string?</code> is optional, <code>string</code> is required)</li>
+      <li>collections, <code>string</code>-keyed dictionaries, nested models, with cycle and depth protection</li>
+      <li><code>[Required]</code>, <code>[Range]</code>, <code>[StringLength]</code>, <code>[MinLength]</code>, <code>[MaxLength]</code>, <code>[RegularExpression]</code>, <code>[EmailAddress]</code>, <code>[Url]</code>, <code>[DefaultValue]</code>, <code>[Description]</code>, <code>[Display]</code></li>
+      <li><code>[JsonPropertyName]</code>, <code>[JsonIgnore]</code></li>
+      <li>XML documentation <code>&lt;summary&gt;</code> on models and properties</li>
+    </ul>
+    <p>
+      <strong>Enums</strong> are always described to the model by name, because names are what a model can
+      reason about. If your API serializes enums as numbers — the default for both System.Text.Json and
+      Newtonsoft.Json — Nabu detects that and converts the names back to their numeric values while
+      building the request body, including inside nested objects and arrays. Nothing to configure;
+      override it with <code>StringEnumsInRequestBody</code> if the detection is ever wrong.
+    </p>
+
+    <div class="pager">
+      <a href="getting-started.html"><span class="dir">Previous</span>← Getting started</a>
+      <a href="minimal-apis.html"><span class="dir">Next</span>Minimal APIs →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
