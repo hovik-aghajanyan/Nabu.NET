@@ -164,7 +164,7 @@ pre code { background: none; border: none; padding: 0; }
 /* Layout */
 main { max-width: 1080px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
 
-article.doc { max-width: 820px; }
+article.doc { max-width: 820px; margin: auto; }
 
 h1 { font-size: 2rem; line-height: 1.25; margin: 0.5rem 0 1rem; }
 h2 { font-size: 1.5rem; margin-top: 2.5rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
