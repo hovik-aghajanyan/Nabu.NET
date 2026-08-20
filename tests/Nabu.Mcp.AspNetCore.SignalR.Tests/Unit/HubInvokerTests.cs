@@ -48,15 +48,41 @@ namespace Nabu.Mcp.AspNetCore.SignalR.Tests.Unit
             }
         }
 
-        private static async Task<(McpToolInvocationResult Result, McpToolDescriptor Tool)> InvokeAsync(
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        public class GatedHub : Hub
+        {
+            [McpTool]
+            public Task<string> Plain() => Task.FromResult("gated ok");
+        }
+
+        [Microsoft.AspNetCore.Authorization.Authorize(Policy = "AdminOnly")]
+        public class AdminGatedHub : Hub
+        {
+            [McpTool]
+            public Task<string> Plain() => Task.FromResult("admin ok");
+        }
+
+        private static Task<(McpToolInvocationResult Result, McpToolDescriptor Tool)> InvokeAsync(
             string toolName,
             JsonObject arguments,
             Action<NabuMcpSignalROptions>? configure = null)
         {
+            return InvokeAsync<EchoHub>(toolName, arguments, configure);
+        }
+
+        private static async Task<(McpToolInvocationResult Result, McpToolDescriptor Tool)> InvokeAsync<THub>(
+            string toolName,
+            JsonObject arguments,
+            Action<NabuMcpSignalROptions>? configure = null,
+            System.Security.Claims.ClaimsPrincipal? user = null)
+            where THub : Hub
+        {
             var services = new ServiceCollection();
             services.AddLogging();
             services.AddSignalR();
-            services.AddAuthorization();
+            services.AddAuthorization(options => options.AddPolicy(
+                "AdminOnly",
+                policy => policy.RequireRole("admin")));
             var provider = services.BuildServiceProvider();
 
             var options = new NabuMcpSignalROptions();
@@ -69,14 +95,74 @@ namespace Nabu.Mcp.AspNetCore.SignalR.Tests.Unit
                 new JsonSchemaGenerator(NullXmlDocumentationProvider.Instance),
                 NullXmlDocumentationProvider.Instance);
 
-            var tools = source.CreateHubTools(typeof(EchoHub), "/hubs/echo", new HashSet<string>(StringComparer.Ordinal));
+            var tools = source.CreateHubTools(typeof(THub), "/hubs/test", new HashSet<string>(StringComparer.Ordinal));
             var tool = tools.Single(t => t.Name == toolName);
 
             var context = new DefaultHttpContext { RequestServices = provider };
+            if (user != null)
+            {
+                context.User = user;
+            }
+
             var invoker = new SignalRHubToolInvoker(Options.Create(options));
 
             var result = await invoker.InvokeAsync(tool, arguments, context, CancellationToken.None);
             return (result, tool);
+        }
+
+        private static System.Security.Claims.ClaimsPrincipal Authenticated(string name, params string[] roles)
+        {
+            var claims = new List<System.Security.Claims.Claim>
+            {
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, name),
+            };
+            foreach (var role in roles)
+            {
+                claims.Add(new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, role));
+            }
+
+            return new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(claims, authenticationType: "Test"));
+        }
+
+        [Fact]
+        public async Task The_class_gate_refuses_an_anonymous_caller_with_401()
+        {
+            var (result, _) = await InvokeAsync<GatedHub>("gated_plain", new JsonObject());
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal(401, result.StatusCode);
+            Assert.Contains("authorized caller", result.Body);
+        }
+
+        [Fact]
+        public async Task The_class_gate_admits_an_authenticated_caller()
+        {
+            var (result, _) = await InvokeAsync<GatedHub>(
+                "gated_plain", new JsonObject(), user: Authenticated("alice"));
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal("\"gated ok\"", result.Body);
+        }
+
+        [Fact]
+        public async Task A_class_level_policy_refuses_an_authenticated_caller_that_lacks_it_with_403()
+        {
+            var (result, _) = await InvokeAsync<AdminGatedHub>(
+                "admin_gated_plain", new JsonObject(), user: Authenticated("alice", "user"));
+
+            Assert.False(result.IsSuccess);
+            Assert.Equal(403, result.StatusCode);
+        }
+
+        [Fact]
+        public async Task A_class_level_policy_admits_a_caller_that_satisfies_it()
+        {
+            var (result, _) = await InvokeAsync<AdminGatedHub>(
+                "admin_gated_plain", new JsonObject(), user: Authenticated("root", "admin"));
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal("\"admin ok\"", result.Body);
         }
 
         [Fact]

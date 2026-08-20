@@ -44,7 +44,8 @@ jobs:
           set -euo pipefail
           for project in \
             src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj \
-            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj
+            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj \
+            src/Nabu.Mcp.AspNetCore.SignalR/Nabu.Mcp.AspNetCore.SignalR.csproj
           do
             dotnet pack "${project}" --configuration Release --no-build --output artifacts
           done

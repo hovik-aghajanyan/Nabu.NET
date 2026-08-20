@@ -212,7 +212,14 @@ namespace Nabu.Mcp.AspNetCore.SignalR.Execution
                             ? "The hub closed the connection before completing the invocation."
                             : "The hub closed the connection: " + closeError);
 
-                    default: // ping and anything newer: irrelevant to the invocation
+                    case 6:
+                        // Echo pings back. The server aborts clients it has not heard from within
+                        // ClientTimeoutInterval (default 30s); the echo keeps a long-running stream
+                        // alive however high InvocationTimeout is raised.
+                        await SendFrameAsync(output, "{\"type\":6}", token).ConfigureAwait(false);
+                        break;
+
+                    default: // anything newer: irrelevant to the invocation
                         break;
                 }
             }

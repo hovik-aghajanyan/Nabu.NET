@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Nabu.NET — Turn your ASP.NET Core Web API into an MCP Server</title>
-  <meta name="description" content="Nabu.Mcp.AspNetCore turns existing ASP.NET Core controllers and Minimal APIs into Model Context Protocol (MCP) tools with one attribute. Same endpoints, same authorization, same validation — no rewrite.">
+  <meta name="description" content="Nabu.Mcp.AspNetCore turns existing ASP.NET Core controllers, Minimal APIs and SignalR hubs into Model Context Protocol (MCP) tools with one attribute. Same endpoints, same authorization, same validation — no rewrite.">
   <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/">
   <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
   <link rel="stylesheet" href="assets/style.css">
@@ -13,14 +13,14 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Nabu.NET">
   <meta property="og:title" content="Nabu.NET — Turn your ASP.NET Core Web API into an MCP Server">
-  <meta property="og:description" content="One attribute turns existing ASP.NET Core controllers and Minimal APIs into Model Context Protocol tools. Authentication, authorization, validation and middleware keep working.">
+  <meta property="og:description" content="One attribute turns existing ASP.NET Core controllers, Minimal APIs and SignalR hubs into Model Context Protocol tools. Authentication, authorization, validation and middleware keep working.">
   <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/">
   <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Nabu.NET — Turn your ASP.NET Core Web API into an MCP Server">
-  <meta name="twitter:description" content="One attribute turns existing ASP.NET Core controllers and Minimal APIs into Model Context Protocol tools — without rewriting your API.">
+  <meta name="twitter:description" content="One attribute turns existing ASP.NET Core controllers, Minimal APIs and SignalR hubs into Model Context Protocol tools — without rewriting your API.">
   <meta name="twitter:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
 
   <script type="application/ld+json">
@@ -31,14 +31,14 @@
         "@type": "SoftwareSourceCode",
         "name": "Nabu.NET",
         "alternateName": "Nabu.Mcp.AspNetCore",
-        "description": "A .NET library that turns existing ASP.NET Core controller actions and Minimal API route handlers into Model Context Protocol (MCP) tools. Tool calls are replayed as real HTTP requests through the application's own pipeline, so authentication, authorization, validation and middleware keep working.",
+        "description": "A .NET library that turns existing ASP.NET Core controller actions, Minimal API route handlers and SignalR hub methods into Model Context Protocol (MCP) tools. Tool calls are replayed as real HTTP requests through the application's own pipeline, so authentication, authorization, validation and middleware keep working.",
         "url": "https://hovik-aghajanyan.github.io/nabu.net/",
         "codeRepository": "https://github.com/hovik-aghajanyan/nabu.net",
         "programmingLanguage": "C#",
         "runtimePlatform": [".NET 8", ".NET 10", ".NET Standard 2.0"],
         "license": "https://opensource.org/licenses/MIT",
         "author": { "@type": "Person", "name": "Hovik Aghajanyan", "url": "https://aghajanyan.me" },
-        "keywords": "MCP, Model Context Protocol, ASP.NET Core, Web API, Minimal API, C#, .NET, AI tools, LLM tools, MCP server"
+        "keywords": "MCP, Model Context Protocol, ASP.NET Core, Web API, Minimal API, SignalR, C#, .NET, AI tools, LLM tools, MCP server"
       },
       {
         "@type": "FAQPage",
@@ -48,7 +48,7 @@
             "name": "What is Nabu.NET?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Nabu.NET (package Nabu.Mcp.AspNetCore) is a .NET library that publishes existing ASP.NET Core controller actions and Minimal API route handlers as Model Context Protocol (MCP) tools. Adding the [McpTool] attribute — or the .McpTool() endpoint convention — is the entire integration."
+              "text": "Nabu.NET (package Nabu.Mcp.AspNetCore) is a .NET library that publishes existing ASP.NET Core controller actions and Minimal API route handlers as Model Context Protocol (MCP) tools — and, through the Nabu.Mcp.AspNetCore.SignalR extension, SignalR hub methods too. Adding the [McpTool] attribute — or the .McpTool() endpoint convention — is the entire integration."
             }
           },
           {

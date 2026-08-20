@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nabu.Mcp.AspNetCore.SignalR\Nabu.Mcp.AspNetCore.SignalR.csproj" />
     <ProjectReference Include="..\..\samples\Nabu.Sample.ChatHub\Nabu.Sample.ChatHub.csproj" />
+    <ProjectReference Include="..\..\src\Nabu.Mcp.ModelContextProtocol\Nabu.Mcp.ModelContextProtocol.csproj" />
   </ItemGroup>
 
 </Project>

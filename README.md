@@ -327,7 +327,8 @@ Options on `AddNabuMcpSignalR(options => ...)`:
 Current limits: methods with client-to-server streaming parameters (`ChannelReader<T>` /
 `IAsyncEnumerable<T>` parameters) are skipped with a log line, the synthetic connection speaks
 the JSON hub protocol (a MessagePack-only server is not supported), and the package targets
-net8.0+ like the other extension package.
+net8.0+ like the other extension package. Hub results are bounded by the item caps above rather
+than by `MaxResponseBytes`, which applies to HTTP bodies only.
 
 `samples/Nabu.Sample.ChatHub` is a complete runnable example: a JWT-secured chat room whose hub
 methods are MCP tools with per-caller visibility - reading is anonymous, `chat_send_message`
@@ -826,7 +827,7 @@ The demo tokens live for 24 hours; `docker compose up` again regenerates them.
 
 ```bash
 dotnet build          # netstandard2.0 + net8.0 + net10.0
-dotnet test           # 305 tests
+dotnet test           # 311 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
