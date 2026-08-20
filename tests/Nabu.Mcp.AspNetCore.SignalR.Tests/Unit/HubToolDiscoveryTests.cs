@@ -55,6 +55,23 @@ namespace Nabu.Mcp.AspNetCore.SignalR.Tests.Unit
             public Task MarkedAnonymous() => Task.CompletedTask;
         }
 
+        public class VariantHub : Hub
+        {
+            /// <summary>Searches messages.</summary>
+            [McpTool]
+            [McpTool("messages_recent",
+                Title = "Recent messages",
+                Description = "Lists recent messages without filtering.",
+                ExcludeParameters = new[] { "search" },
+                ConstantParameters = new[] { "pageSize=100" })]
+            [McpTool("messages_search",
+                Title = "Search messages",
+                Description = "Searches messages by text.",
+                IncludeParameters = new[] { "search", "pageSize" },
+                RequiredParameters = new[] { "search" })]
+            public Task List(string? search, int pageSize = 20) => Task.CompletedTask;
+        }
+
         [McpTool]
         public class BlanketHub : Hub
         {
@@ -184,6 +201,32 @@ namespace Nabu.Mcp.AspNetCore.SignalR.Tests.Unit
 
             Assert.Contains(tools, tool => tool.Name == "annotated_not_published");
             Assert.DoesNotContain(tools, tool => tool.Name.Contains("hidden"));
+        }
+
+        [Fact]
+        public void One_hub_method_publishes_several_tools_with_their_own_parameter_sets()
+        {
+            var tools = Discover<VariantHub>();
+
+            Assert.Equal(3, tools.Count);
+
+            // The unnamed variant: the full method, unchanged.
+            var full = tools.Single(t => t.Name == "variant_list");
+            Assert.Equal(new[] { "search", "pageSize" }, full.Parameters.Select(p => p.Name).ToArray());
+            Assert.DoesNotContain(full.Parameters, p => p.IsRequired);
+
+            // Excluded input hidden (falls back to its default), constant pinned and gone from the schema.
+            var recent = tools.Single(t => t.Name == "messages_recent");
+            Assert.Equal("Recent messages", recent.Annotations.Title);
+            Assert.Empty(recent.Parameters);
+            var constant = Assert.Single(recent.Constants);
+            Assert.Equal("pageSize", constant.BindingName);
+
+            // Whitelisted inputs only, with one promoted to required.
+            var search = tools.Single(t => t.Name == "messages_search");
+            Assert.Equal(new[] { "search", "pageSize" }, search.Parameters.Select(p => p.Name).ToArray());
+            Assert.True(search.Parameters.Single(p => p.Name == "search").IsRequired);
+            Assert.False(search.Parameters.Single(p => p.Name == "pageSize").IsRequired);
         }
 
         [Fact]

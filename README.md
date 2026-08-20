@@ -827,7 +827,7 @@ The demo tokens live for 24 hours; `docker compose up` again regenerates them.
 
 ```bash
 dotnet build          # netstandard2.0 + net8.0 + net10.0
-dotnet test           # 311 tests
+dotnet test           # 312 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
