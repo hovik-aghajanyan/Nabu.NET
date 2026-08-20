@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net8.0+ only: the invoker drives the application's own HubConnectionHandler<THub>, which
+      lives in the shared framework's SignalR server. There is no netstandard2.0 story here -
+      apps on ASP.NET Core 2.x keep exposing their HTTP endpoints through the core package.
+    -->
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <RootNamespace>Nabu.Mcp.AspNetCore.SignalR</RootNamespace>
+    <AssemblyName>Nabu.Mcp.AspNetCore.SignalR</AssemblyName>
+    <PackageId>Nabu.Mcp.AspNetCore.SignalR</PackageId>
+    <Title>Nabu.NET - MCP tools for SignalR hubs</Title>
+    <Description>
+      Expose SignalR hub methods as Model Context Protocol (MCP) tools with the same [McpTool]
+      attribute the core package uses for controllers. A tool call opens a synthetic in-process
+      SignalR connection through the application's own HubConnectionHandler, so hub filters,
+      method-level authorization, OnConnectedAsync and streaming all behave exactly as they do for
+      a real client - and broadcasts reach the clients that are really connected.
+    </Description>
+    <PackageTags>mcp;model-context-protocol;aspnetcore;signalr;ai;llm;tools</PackageTags>
+    <PackageProjectUrl>https://nabu.aghajanyan.me</PackageProjectUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\Nabu.Mcp.AspNetCore\Nabu.Mcp.AspNetCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nabu.Mcp.AspNetCore.SignalR.Tests" />
+  </ItemGroup>
+
+</Project>

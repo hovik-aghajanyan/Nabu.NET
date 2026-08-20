@@ -1208,7 +1208,7 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             return nullable == false;
         }
 
-        private static JsonObject BuildInputSchema(IReadOnlyList<McpToolParameterDescriptor> parameters)
+        internal static JsonObject BuildInputSchema(IReadOnlyList<McpToolParameterDescriptor> parameters)
         {
             var properties = new JsonObject();
             var required = new JsonArray();
