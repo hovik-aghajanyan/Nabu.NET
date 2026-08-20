@@ -39,6 +39,7 @@ app.MapGet("/customers/{id}", (int id) => ...)
 - [Getting started](#getting-started)
 - [Attributes](#attributes)
 - [Minimal APIs](#minimal-apis)
+- [SignalR hubs](#signalr-hubs)
 - [One action, several tools](#one-action-several-tools)
 - [How arguments are mapped](#how-arguments-are-mapped)
 - [File uploads](#file-uploads)
@@ -258,6 +259,81 @@ targets only, not on the netstandard2.0 asset for ASP.NET Core 2.x. On .NET 8+ r
 endpoints demand antiforgery by default - a tool call cannot carry an antiforgery token, so such
 endpoints need `.DisableAntiforgery()` (or the app's `UseAntiforgery()` setup) exactly as any
 non-browser client does.
+
+## SignalR hubs
+
+The `Nabu.Mcp.AspNetCore.SignalR` extension package publishes SignalR hub methods the same way -
+same `[McpTool]` / `[McpIgnore]` / `[McpParameter]` attributes, same naming, same XML-doc
+descriptions, same authorization-aware visibility - into the same `/mcp` catalogue as the HTTP
+tools, on both protocol layers:
+
+```csharp
+builder.Services.AddSignalR();
+builder.Services.AddNabuMcp(options => { ... })
+                .AddNabuMcpSignalR();
+
+app.UseNabuMcp();
+app.MapHub<ChatHub>("/hubs/chat");
+```
+
+```csharp
+public class ChatHub : Hub
+{
+    /// <summary>Sends a message to the chat room. It is broadcast to every connected client.</summary>
+    [Authorize]
+    [McpTool]
+    public async Task<ChatMessage> SendMessage(string text) => ...
+}
+```
+
+The philosophy is the same as for HTTP: **the tool call runs through the real thing.** Each
+invocation opens a synthetic in-process SignalR connection through the application's own
+`HubConnectionHandler<THub>` - the exact machinery a live client talks to - so:
+
+- **Hub filters, method-level `[Authorize]` and parameter binding** are enforced by SignalR's own
+  dispatcher, not re-implemented. The same `[Authorize(Policy = "AdminOnly")]` that refuses a
+  live client refuses the same caller over MCP.
+- **`OnConnectedAsync` / `OnDisconnectedAsync` run** for every tool call, exactly as they do for a
+  real (short-lived) connection - worth knowing if a hub announces presence from them.
+- **Broadcasts are real.** `Clients.All`, `Clients.Others` and group sends go out through the
+  app's hub context to the clients that are really connected - call `chat_send_message` over MCP
+  and every browser on the hub sees the message arrive live.
+- **`Clients.Caller` is captured.** Messages a hub method sends back to the calling connection
+  land in the tool result under `callerMessages`, alongside the return value - so hub methods
+  that "return" by messaging the caller still produce a useful result.
+- **Streaming methods work.** An `IAsyncEnumerable<T>` / `ChannelReader<T>` method is published
+  as a tool that collects the stream into `streamItems`, bounded by `MaxStreamItems` and flagged
+  `truncated` when the cap cuts it short.
+
+One thing the dispatcher never sees is a hub-**class**-level `[Authorize]`: on a live connection
+it is endpoint metadata, enforced when the HTTP negotiate happens. The invoker therefore evaluates
+it itself before opening the synthetic connection - and because a caller that cannot connect can
+call nothing, a method-level `[AllowAnonymous]` does **not** opt out of it, matching real SignalR
+semantics rather than MVC's.
+
+The caller's `ClaimsPrincipal` rides the synthetic connection, so `Context.User`,
+`Context.UserIdentifier` and everything built on them see the MCP caller, and
+`Context.GetHttpContext()` returns the MCP request's context.
+
+Options on `AddNabuMcpSignalR(options => ...)`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `ExposeAllHubMethods` | `false` | Publish every public hub method, not just annotated ones. `[McpIgnore]` still wins. |
+| `MaxStreamItems` | `1000` | Cap on collected stream items; beyond it the stream is cancelled and the result flagged truncated. |
+| `MaxCallerMessages` | `100` | Cap on captured `Clients.Caller` messages. |
+| `InvocationTimeout` | 30 s | How long one invocation - handshake included - may run. |
+
+Current limits: methods with client-to-server streaming parameters (`ChannelReader<T>` /
+`IAsyncEnumerable<T>` parameters) are skipped with a log line, the synthetic connection speaks
+the JSON hub protocol (a MessagePack-only server is not supported), and the package targets
+net8.0+ like the other extension package.
+
+`samples/Nabu.Sample.ChatHub` is a complete runnable example: a JWT-secured chat room whose hub
+methods are MCP tools with per-caller visibility - reading is anonymous, `chat_send_message`
+requires a signed-in caller, `chat_delete_message` appears only for an administrator, a second
+hub demonstrates the class-level gate - plus a browser client at `/` that receives the
+broadcasts a tool call triggers, live.
 
 ## One action, several tools
 
@@ -680,9 +756,12 @@ Newtonsoft.Json.
 ```
 src/Nabu.Mcp.AspNetCore/            the framework
 src/Nabu.Mcp.ModelContextProtocol/  optional adapter serving Nabu's tools through the official MCP C# SDK
+src/Nabu.Mcp.AspNetCore.SignalR/    optional extension publishing SignalR hub methods as tools
 samples/Nabu.Sample.TodoApi/        a JWT-secured todo API wired up with Nabu
 samples/Nabu.Sample.OfficialSdk/    a book catalog served through UseOfficialMcpProtocol()
-tests/Nabu.Mcp.AspNetCore.Tests/  unit and integration tests
+samples/Nabu.Sample.ChatHub/        a SignalR chat room published over MCP, with a live browser client
+tests/Nabu.Mcp.AspNetCore.Tests/          unit and integration tests for the core package
+tests/Nabu.Mcp.AspNetCore.SignalR.Tests/  unit and integration tests for the SignalR extension
 .github/workflows/           CI on every push and PR, NuGet publishing on every v* tag
 ```
 
@@ -707,9 +786,9 @@ dotnet run --project samples/Nabu.Sample.TodoApi
 
 ## Trying it with MCP Inspector
 
-`docker-compose.yml` runs both samples together with the official
+`docker-compose.yml` runs the three samples together with the official
 [MCP Inspector](https://github.com/modelcontextprotocol/inspector), preconfigured to demonstrate the
-per-caller tool exposure above on both protocol layers:
+per-caller tool exposure above on both protocol layers and on SignalR hubs:
 
 ```bash
 docker compose up --build
@@ -722,9 +801,13 @@ config with three connections per sample, each to the same endpoint. For the Tod
 the tool list grow from the 6 anonymous tools to alice's 13 to root's 14 (only root gets
 `todos_delete`). For the book catalog served through the official SDK - `books-anonymous`,
 `books-alice-user` and `books-root-admin` - the list grows from the 2 search tools to alice's 3
-(`books_add`) to root's 4 (`books_remove`). The Todo API is published on
-`http://localhost:5080/mcp` (5080 rather than 5000, which macOS AirPlay occupies) and the
-book catalog on `http://localhost:5081/books/mcp`.
+(`books_add`) to root's 4 (`books_remove`). The chat sample does the same for SignalR hub tools -
+`chat-anonymous`, `chat-alice-user` and `chat-root-admin` - and only root is shown
+`chat_delete_message`. The Todo API is published on
+`http://localhost:5080/mcp` (5080 rather than 5000, which macOS AirPlay occupies), the
+book catalog on `http://localhost:5081/books/mcp`, and the chat sample on
+`http://localhost:5082/mcp` - with its browser client at `http://localhost:5082`, so you can
+watch a `chat_send_message` tool call from the Inspector arrive in the browser live.
 
 The same comparison from the terminal, via the Inspector CLI:
 
@@ -743,14 +826,17 @@ The demo tokens live for 24 hours; `docker compose up` again regenerates them.
 
 ```bash
 dotnet build          # netstandard2.0 + net8.0 + net10.0
-dotnet test           # 243 tests
+dotnet test           # 305 tests
 ```
 
 The suite covers route template parsing, tool naming, JSON schema generation, argument binding,
-constant parsing and enum coercion as units, and drives the real sample application in memory for
+constant parsing and enum coercion as units, and drives the real sample applications in memory for
 discovery, invocation, authorization and protocol behaviour - including that a tool call for one user
 never returns another user's data, that an admin-only action stays admin-only when reached over MCP,
-and that a caller is advertised the tools its own credentials reach and no others.
+and that a caller is advertised the tools its own credentials reach and no others. The SignalR suite
+asserts the same claims for hub tools - method-level policies enforced by the real dispatcher, the
+class-level gate, caller-message capture, streaming caps - and that a broadcast triggered over MCP
+reaches a really connected SignalR client.
 
 Every push to `main` and every pull request runs the same build, test and pack on GitHub Actions
 (`.github/workflows/ci.yml`).

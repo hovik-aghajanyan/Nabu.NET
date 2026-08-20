@@ -90,14 +90,15 @@ jobs:
           --no-build
           -p:Version=${{ steps.version.outputs.version }}
 
-      # Both packages are packed at the same version, so the adapter's project reference to
+      # All packages are packed at the same version, so each extension's project reference to
       # Nabu.Mcp.AspNetCore becomes a NuGet dependency on the version released alongside it.
       - name: Pack
         run: |
           set -euo pipefail
           for project in \
             src/Nabu.Mcp.AspNetCore/Nabu.Mcp.AspNetCore.csproj \
-            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj
+            src/Nabu.Mcp.ModelContextProtocol/Nabu.Mcp.ModelContextProtocol.csproj \
+            src/Nabu.Mcp.AspNetCore.SignalR/Nabu.Mcp.AspNetCore.SignalR.csproj
           do
             dotnet pack "${project}" \
               --configuration Release \

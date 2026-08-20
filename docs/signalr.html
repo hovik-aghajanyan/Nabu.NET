@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SignalR Hubs — Publish Hub Methods as MCP Tools | Nabu.NET</title>
+  <meta name="description" content="Publish ASP.NET Core SignalR hub methods as Model Context Protocol tools with the same [McpTool] attribute. Each tool call opens a synthetic in-process connection through the real hub pipeline — filters, authorization, streaming and broadcasts all preserved.">
+  <link rel="canonical" href="https://hovik-aghajanyan.github.io/nabu.net/signalr.html">
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="assets/style.css">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Nabu.NET">
+  <meta property="og:title" content="SignalR Hubs — Publish Hub Methods as MCP Tools">
+  <meta property="og:description" content="Publish SignalR hub methods as MCP tools with [McpTool]. Tool calls run through the application's own hub pipeline — filters, authorization, streaming and broadcasts preserved.">
+  <meta property="og:url" content="https://hovik-aghajanyan.github.io/nabu.net/signalr.html">
+  <meta property="og:image" content="https://hovik-aghajanyan.github.io/nabu.net/assets/og-image.png">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Publishing SignalR hub methods as MCP tools with Nabu.NET",
+    "description": "How the Nabu.Mcp.AspNetCore.SignalR extension publishes SignalR hub methods as Model Context Protocol tools over a synthetic in-process connection through the real hub pipeline.",
+    "url": "https://hovik-aghajanyan.github.io/nabu.net/signalr.html",
+    "author": { "@type": "Person", "name": "Hovik Aghajanyan" },
+    "breadcrumb": {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Nabu.NET", "item": "https://hovik-aghajanyan.github.io/nabu.net/" },
+        { "@type": "ListItem", "position": 2, "name": "SignalR hubs", "item": "https://hovik-aghajanyan.github.io/nabu.net/signalr.html" }
+      ]
+    }
+  }
+  </script>
+</head>
+<body>
+
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> Nabu.NET</a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="./">Home</a>
+      <a href="getting-started.html">Getting started</a>
+      <a href="attributes-and-tools.html">Attributes &amp; tools</a>
+      <a href="minimal-apis.html">Minimal APIs</a>
+      <a href="signalr.html" aria-current="page">SignalR hubs</a>
+      <a href="security.html">Security</a>
+      <a href="configuration.html">Configuration</a>
+      <a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <article class="doc">
+    <h1>SignalR hubs</h1>
+    <p class="lede">The <code>Nabu.Mcp.AspNetCore.SignalR</code> extension package publishes hub
+    methods with the same <code>[McpTool]</code> attribute controllers use, into the same
+    <code>/mcp</code> catalogue as the HTTP tools — on both protocol layers.</p>
+
+    <pre><code>builder.Services.AddSignalR();
+builder.Services.AddNabuMcp(options =&gt; { ... })
+                .AddNabuMcpSignalR();
+
+app.UseNabuMcp();
+app.MapHub&lt;ChatHub&gt;("/hubs/chat");</code></pre>
+
+    <pre><code>public class ChatHub : Hub
+{
+    /// &lt;summary&gt;Sends a message to the chat room. It is broadcast to every connected client.&lt;/summary&gt;
+    [Authorize]
+    [McpTool]
+    public async Task&lt;ChatMessage&gt; SendMessage(string text) =&gt; ...
+}</code></pre>
+
+    <p>
+      <code>ChatHub.SendMessage</code> becomes <code>chat_send_message</code>, its XML
+      <code>&lt;summary&gt;</code> becomes the tool description, and <code>[McpIgnore]</code>,
+      <code>[McpParameter]</code>, named variants, constants and
+      <code>NabuMcpOptions.ToolNameFactory</code> all behave exactly as they do for controllers.
+      Discovery finds every hub the application has mapped with <code>MapHub&lt;THub&gt;()</code>.
+    </p>
+
+    <h2 id="synthetic-connection">A synthetic connection through the real hub pipeline</h2>
+    <p>
+      The philosophy is the same as for HTTP endpoints: <strong>the tool call runs through the real
+      thing.</strong> Each invocation opens a synthetic in-process SignalR connection through the
+      application's own <code>HubConnectionHandler&lt;THub&gt;</code> — the exact machinery a live
+      client talks to — carrying the MCP caller's <code>ClaimsPrincipal</code>. So:
+    </p>
+    <ul>
+      <li><strong>Hub filters, method-level <code>[Authorize]</code> and parameter binding</strong>
+        are enforced by SignalR's own dispatcher, not re-implemented. The same
+        <code>[Authorize(Policy = "AdminOnly")]</code> that refuses a live client refuses the same
+        caller over MCP.</li>
+      <li><strong><code>OnConnectedAsync</code> / <code>OnDisconnectedAsync</code> run</strong> for
+        every tool call, exactly as for a real, short-lived connection — worth knowing if a hub
+        announces presence from them.</li>
+      <li><strong>Broadcasts are real.</strong> <code>Clients.All</code>, <code>Clients.Others</code>
+        and group sends go out to the clients that are really connected — call
+        <code>chat_send_message</code> over MCP and every browser on the hub sees the message
+        arrive live.</li>
+      <li><strong><code>Context.User</code>, <code>Context.UserIdentifier</code> and
+        <code>Context.GetHttpContext()</code></strong> see the MCP caller and the MCP request.</li>
+    </ul>
+
+    <h2 id="caller-messages">Caller messages and streaming</h2>
+    <p>
+      Messages a hub method sends back to the calling connection — <code>Clients.Caller</code> —
+      land in the tool result under <code>callerMessages</code>, alongside the return value, so hub
+      methods that "return" by messaging the caller still produce a useful result:
+    </p>
+    <pre><code>{
+  "result": null,
+  "callerMessages": [
+    { "method": "whoami", "arguments": [{ "name": "alice", "userIdentifier": "alice" }] }
+  ]
+}</code></pre>
+    <p>
+      A streaming method — <code>IAsyncEnumerable&lt;T&gt;</code> or
+      <code>ChannelReader&lt;T&gt;</code> — is published as a tool that collects the stream into
+      <code>streamItems</code>, bounded by <code>MaxStreamItems</code>; when the cap cuts the
+      stream short the result carries <code>"truncated": true</code> and the stream is cancelled
+      server-side. When a method returns a plain value and nothing else was captured, the tool
+      result is just that value, so simple hub methods read like simple HTTP tools.
+    </p>
+
+    <h2 id="authorization">Authorization: the class-level gate</h2>
+    <p>
+      Method-level <code>[Authorize]</code> is enforced by the hub dispatcher itself. A
+      hub-<em>class</em>-level <code>[Authorize]</code> is different: on a live connection it is
+      endpoint metadata, enforced when the HTTP negotiate happens — a connection that fails it never
+      exists. The invoker reproduces that gate: it evaluates the class-level requirement against the
+      MCP caller before opening the synthetic connection, and because a caller that cannot connect
+      can call nothing, a method-level <code>[AllowAnonymous]</code> does <strong>not</strong> opt
+      out of it — matching real SignalR semantics rather than MVC's.
+    </p>
+    <p>
+      <code>ToolVisibility</code> works the same way it does for HTTP tools: hub tools are
+      advertised per caller, reading the hub's and the method's own attributes, so an anonymous
+      caller is shown only the tools it can actually invoke.
+    </p>
+
+    <h2 id="options">Options</h2>
+    <table>
+      <thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>ExposeAllHubMethods</code></td><td><code>false</code></td><td>Publish every public hub method, not just annotated ones. <code>[McpIgnore]</code> still wins.</td></tr>
+        <tr><td><code>MaxStreamItems</code></td><td><code>1000</code></td><td>Cap on collected stream items; beyond it the stream is cancelled and the result flagged truncated.</td></tr>
+        <tr><td><code>MaxCallerMessages</code></td><td><code>100</code></td><td>Cap on captured <code>Clients.Caller</code> messages.</td></tr>
+        <tr><td><code>InvocationTimeout</code></td><td>30 s</td><td>How long one invocation — handshake included — may run.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="limitations">Current limitations</h2>
+    <div class="note">
+      Methods with client-to-server streaming parameters (<code>ChannelReader&lt;T&gt;</code> /
+      <code>IAsyncEnumerable&lt;T&gt;</code> parameters) are skipped with a log line. The synthetic
+      connection speaks the JSON hub protocol, so a MessagePack-only server is not supported. The
+      package targets net8.0+, like the official-SDK adapter.
+    </div>
+
+    <h2 id="sample">The chat sample</h2>
+    <p>
+      <code>samples/Nabu.Sample.ChatHub</code> is a complete runnable example: a JWT-secured chat
+      room whose hub methods are MCP tools with per-caller visibility — reading is anonymous,
+      <code>chat_send_message</code> requires a signed-in caller, <code>chat_delete_message</code>
+      appears only for an administrator, and a second hub demonstrates the class-level gate — plus
+      a browser client on the same hub, so a message sent over MCP visibly arrives in the browser
+      live. It runs in the repository's <code>docker compose up</code> demo alongside the other
+      samples, preconfigured in MCP Inspector as <code>chat-anonymous</code>,
+      <code>chat-alice-user</code> and <code>chat-root-admin</code>.
+    </p>
+
+    <div class="pager">
+      <a href="minimal-apis.html"><span class="dir">Previous</span>← Minimal APIs</a>
+      <a href="security.html"><span class="dir">Next</span>Authentication &amp; security →</a>
+    </div>
+  </article>
+</main>
+
+<footer class="site-footer">
+  <div class="inner">
+    <span>© Hovik Aghajanyan · <a href="https://github.com/hovik-aghajanyan/nabu.net/blob/main/LICENSE" rel="noopener">MIT License</a></span>
+    <span><a href="https://github.com/hovik-aghajanyan/nabu.net" rel="noopener">GitHub</a> · <a href="https://www.nuget.org/packages/Nabu.Mcp.AspNetCore" rel="noopener">NuGet</a> · <a href="https://modelcontextprotocol.io" rel="noopener">MCP Specification</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
