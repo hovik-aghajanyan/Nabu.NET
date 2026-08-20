@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nabu Chat Sample</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
+    body { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.3rem; }
+    #messages { list-style: none; padding: 0; border: 1px solid #8884; border-radius: 8px; min-height: 200px; max-height: 50vh; overflow-y: auto; }
+    #messages li { padding: .4rem .8rem; border-bottom: 1px solid #8882; }
+    #messages li .u { font-weight: 600; margin-right: .5rem; }
+    #messages li .t { opacity: .55; font-size: .8rem; float: right; }
+    form { display: flex; gap: .5rem; margin-top: .75rem; }
+    input[type=text], input[type=password] { flex: 1; padding: .5rem; border-radius: 6px; border: 1px solid #8886; }
+    button { padding: .5rem 1rem; border-radius: 6px; border: 0; background: #0b5cad; color: #fff; cursor: pointer; }
+    #status { font-size: .85rem; opacity: .7; margin: .5rem 0; }
+    .hint { font-size: .85rem; opacity: .7; border-left: 3px solid #0b5cad; padding-left: .75rem; }
+  </style>
+</head>
+<body>
+  <h1>Nabu chat room</h1>
+  <p class="hint">
+    This page is a real SignalR client on <code>/hubs/chat</code>. The same hub methods are
+    published as MCP tools on <code>/mcp</code> - call <code>chat_send_message</code> from an MCP
+    client (with a bearer token from <code>POST /api/auth/login</code>, accounts
+    <code>alice</code>/<code>root</code>, password <code>password</code>) and the message appears
+    here live.
+  </p>
+
+  <div id="login">
+    <form id="loginForm">
+      <input type="text" id="username" placeholder="alice or root" value="alice" />
+      <input type="password" id="password" placeholder="password" value="password" />
+      <button type="submit">Sign in &amp; connect</button>
+    </form>
+  </div>
+
+  <div id="status">Not connected.</div>
+  <ul id="messages"></ul>
+
+  <form id="sendForm" hidden>
+    <input type="text" id="text" placeholder="Say something..." autocomplete="off" />
+    <button type="submit">Send</button>
+  </form>
+
+  <script src="https://unpkg.com/@microsoft/signalr@8/dist/browser/signalr.min.js"></script>
+  <script>
+    const messages = document.getElementById("messages");
+    const status = document.getElementById("status");
+    let connection = null;
+
+    function render(message) {
+      const li = document.createElement("li");
+      li.dataset.id = message.id;
+      li.innerHTML = '<span class="u"></span><span class="x"></span><span class="t"></span>';
+      li.querySelector(".u").textContent = message.user;
+      li.querySelector(".x").textContent = message.text;
+      li.querySelector(".t").textContent = new Date(message.sentAt).toLocaleTimeString();
+      messages.appendChild(li);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    document.getElementById("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      status.textContent = "Signing in...";
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("username").value,
+          password: document.getElementById("password").value,
+        }),
+      });
+      if (!response.ok) { status.textContent = "Sign-in failed."; return; }
+      const { accessToken } = await response.json();
+
+      connection = new signalR.HubConnectionBuilder()
+        .withUrl("/hubs/chat", { accessTokenFactory: () => accessToken })
+        .withAutomaticReconnect()
+        .build();
+
+      connection.on("messageReceived", render);
+      connection.on("messageDeleted", (id) => {
+        const li = messages.querySelector('li[data-id="' + id + '"]');
+        if (li) li.remove();
+      });
+
+      await connection.start();
+      status.textContent = "Connected as " + document.getElementById("username").value +
+        ". Messages sent over MCP appear here live.";
+      document.getElementById("login").hidden = true;
+      document.getElementById("sendForm").hidden = false;
+
+      (await connection.invoke("GetRecentMessages", 50)).forEach(render);
+    });
+
+    document.getElementById("sendForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("text");
+      if (!input.value.trim()) return;
+      await connection.invoke("SendMessage", input.value);
+      input.value = "";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Nabu.Sample.ChatHub</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Nabu reads these XML comments to describe tools and parameters to the model. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Nabu.Mcp.AspNetCore\Nabu.Mcp.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Nabu.Mcp.AspNetCore.SignalR\Nabu.Mcp.AspNetCore.SignalR.csproj" />
+  </ItemGroup>
+
+</Project>
