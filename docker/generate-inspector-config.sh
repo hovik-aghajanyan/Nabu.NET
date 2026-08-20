@@ -7,6 +7,7 @@ set -eu
 
 TODO_API=${TODO_API_URL:-http://todo-api:8080}
 BOOKS_API=${BOOKS_API_URL:-http://official-sdk-api:8080}
+CHAT_API=${CHAT_API_URL:-http://chat-api:8080}
 OUT=${OUT_FILE:-/shared/mcp-servers.json}
 
 # $1: base URL of the API to wait for.
@@ -29,12 +30,16 @@ token() {
 
 wait_for_login "$TODO_API"
 wait_for_login "$BOOKS_API"
+wait_for_login "$CHAT_API"
 
 TODO_ALICE=$(token "$TODO_API" alice)
 TODO_ROOT=$(token "$TODO_API" root)
 BOOKS_ALICE=$(token "$BOOKS_API" alice)
 BOOKS_ROOT=$(token "$BOOKS_API" root)
+CHAT_ALICE=$(token "$CHAT_API" alice)
+CHAT_ROOT=$(token "$CHAT_API" root)
 [ -n "$TODO_ALICE" ] && [ -n "$TODO_ROOT" ] && [ -n "$BOOKS_ALICE" ] && [ -n "$BOOKS_ROOT" ] \
+  && [ -n "$CHAT_ALICE" ] && [ -n "$CHAT_ROOT" ] \
   || { echo "Failed to obtain tokens" >&2; exit 1; }
 
 cat > "$OUT" <<EOF
@@ -67,9 +72,23 @@ cat > "$OUT" <<EOF
       "type": "http",
       "url": "$BOOKS_API/books/mcp",
       "headers": { "Authorization": "Bearer $BOOKS_ROOT" }
+    },
+    "chat-anonymous": {
+      "type": "http",
+      "url": "$CHAT_API/mcp"
+    },
+    "chat-alice-user": {
+      "type": "http",
+      "url": "$CHAT_API/mcp",
+      "headers": { "Authorization": "Bearer $CHAT_ALICE" }
+    },
+    "chat-root-admin": {
+      "type": "http",
+      "url": "$CHAT_API/mcp",
+      "headers": { "Authorization": "Bearer $CHAT_ROOT" }
     }
   }
 }
 EOF
 
-echo "Wrote $OUT (anonymous / alice / root for todo and books)"
+echo "Wrote $OUT (anonymous / alice / root for todo, books and chat)"

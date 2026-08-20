@@ -12,6 +12,13 @@
 #   books-anonymous   -> books_search + books_get only
 #   books-alice-user  -> + books_add
 #   books-root-admin  -> + books_remove (admin-only)
+#   chat-anonymous    -> the two read tools of the SignalR chat hub
+#   chat-alice-user   -> + chat_send_message, chat_who_am_i, presence tools
+#   chat-root-admin   -> + chat_delete_message (admin-only)
+#
+# The chat sample also serves a browser client at http://localhost:5082 -
+# open it, sign in, then call chat_send_message from the Inspector and watch
+# the message arrive in the browser live.
 #
 # The same comparison, scriptable:
 #   docker compose run --rm inspector --cli --config /shared/mcp-servers.json \
@@ -51,6 +58,22 @@ services:
       timeout: 3s
       retries: 30
 
+  # SignalR hub methods published as MCP tools through Nabu.Mcp.AspNetCore.SignalR,
+  # plus a live browser client on the same hub.
+  chat-api:
+    build:
+      context: .
+      dockerfile: samples/Nabu.Sample.ChatHub/Dockerfile
+    ports:
+      - "5082:8080"
+    environment:
+      Jwt__LifetimeMinutes: "1440"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
   # One-shot: logs in as alice and root on both samples, writes the Inspector
   # catalog with anonymous / alice / root connections per sample into the
   # shared volume.
@@ -67,6 +90,8 @@ services:
       todo-api:
         condition: service_healthy
       official-sdk-api:
+        condition: service_healthy
+      chat-api:
         condition: service_healthy
 
   inspector:
