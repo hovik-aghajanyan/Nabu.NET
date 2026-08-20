@@ -155,6 +155,20 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             Annotations = annotations;
         }
 
+        /// <summary>
+        /// Describes a tool that is not backed by an HTTP endpoint - one contributed by an
+        /// <see cref="IMcpToolSource"/>, such as a SignalR hub method. Such a tool has no verb or
+        /// route, and is dispatched through <see cref="InvokerType"/> rather than the pipeline replay.
+        /// </summary>
+        public McpToolDescriptor(
+            string name,
+            IReadOnlyList<McpToolParameterDescriptor> parameters,
+            JsonObject inputSchema,
+            McpToolAnnotations annotations)
+            : this(name, string.Empty, string.Empty, parameters, inputSchema, annotations)
+        {
+        }
+
         /// <summary>Tool name advertised over MCP.</summary>
         public string Name { get; }
 
@@ -208,6 +222,14 @@ namespace Nabu.Mcp.AspNetCore.Discovery
         public IReadOnlyDictionary<string, string?> ConstantRouteValues { get; set; } =
             new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
-        public override string ToString() => Name + " (" + HttpMethod + " /" + RouteTemplate + ")";
+        /// <summary>
+        /// The <see cref="Execution.IMcpToolInvoker"/> implementation that runs this tool, resolved
+        /// from the request's services. <c>null</c> - the default, and the value for every
+        /// HTTP-discovered tool - means the standard pipeline-replay invoker.
+        /// </summary>
+        public Type? InvokerType { get; set; }
+
+        public override string ToString() =>
+            HttpMethod.Length == 0 ? Name : Name + " (" + HttpMethod + " /" + RouteTemplate + ")";
     }
 }

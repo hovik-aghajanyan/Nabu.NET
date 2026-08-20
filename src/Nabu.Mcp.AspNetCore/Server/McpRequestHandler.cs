@@ -465,7 +465,7 @@ namespace Nabu.Mcp.AspNetCore.Server
             McpToolInvocationResult result;
             try
             {
-                result = await _invoker.InvokeAsync(tool!, arguments, context, cancellationToken).ConfigureAwait(false);
+                result = await ResolveInvoker(tool!, context).InvokeAsync(tool!, arguments, context, cancellationToken).ConfigureAwait(false);
             }
             catch (McpArgumentException)
             {
@@ -480,20 +480,54 @@ namespace Nabu.Mcp.AspNetCore.Server
             return BuildToolResult(tool!, result);
         }
 
+        /// <summary>
+        /// The invoker that runs <paramref name="tool"/>: the default HTTP pipeline replay, unless
+        /// the descriptor names its own <see cref="McpToolDescriptor.InvokerType"/> - which tools
+        /// contributed by an <see cref="Discovery.IMcpToolSource"/> do.
+        /// </summary>
+        private IMcpToolInvoker ResolveInvoker(McpToolDescriptor tool, HttpContext context)
+        {
+            if (tool.InvokerType == null)
+            {
+                return _invoker;
+            }
+
+            var invoker = context.RequestServices.GetService(tool.InvokerType) as IMcpToolInvoker;
+            if (invoker == null)
+            {
+                throw new InvalidOperationException(
+                    "Tool '" + tool.Name + "' names " + tool.InvokerType + " as its invoker, but that service is not registered.");
+            }
+
+            return invoker;
+        }
+
         internal JsonObject BuildToolResult(McpToolDescriptor tool, McpToolInvocationResult result)
         {
             var isError = _options.TreatErrorStatusAsToolError && !result.IsSuccess;
 
+            // Tools that are not HTTP-backed have no meaningful status code to show the model.
+            var isHttp = tool.HttpMethod.Length != 0;
+
             var text = result.Body;
             if (string.IsNullOrEmpty(text))
             {
-                text = isError
-                    ? "The request failed with HTTP status " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + "."
-                    : "The request completed with HTTP status " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + " and an empty body.";
+                if (isHttp)
+                {
+                    text = isError
+                        ? "The request failed with HTTP status " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + "."
+                        : "The request completed with HTTP status " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + " and an empty body.";
+                }
+                else
+                {
+                    text = isError ? "The tool failed." : "The tool completed with an empty result.";
+                }
             }
             else if (isError)
             {
-                text = "HTTP " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + ": " + text;
+                text = isHttp
+                    ? "HTTP " + result.StatusCode.ToString(CultureInfo.InvariantCulture) + ": " + text
+                    : text;
             }
 
             if (result.Truncated)

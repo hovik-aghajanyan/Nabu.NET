@@ -45,8 +45,9 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             IXmlDocumentationProvider documentation,
             EndpointDataSource? endpointDataSource,
             IServiceProviderIsService? serviceProviderIsService,
-            ILogger<McpToolRegistry>? logger)
-            : this(actionProvider, options, schemaGenerator, documentation, logger)
+            ILogger<McpToolRegistry>? logger,
+            IEnumerable<IMcpToolSource>? toolSources = null)
+            : this(actionProvider, options, schemaGenerator, documentation, logger, toolSources)
         {
             _endpointDataSource = endpointDataSource;
             _serviceProviderIsService = serviceProviderIsService;

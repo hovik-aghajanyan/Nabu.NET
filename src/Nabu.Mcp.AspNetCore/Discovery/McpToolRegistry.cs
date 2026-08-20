@@ -55,11 +55,14 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             FormCollection,
         }
 
+        private static readonly IMcpToolSource[] NoToolSources = new IMcpToolSource[0];
+
         private readonly IActionDescriptorCollectionProvider? _actionProvider;
         private readonly NabuMcpOptions _options;
         private readonly JsonSchemaGenerator _schemaGenerator;
         private readonly IXmlDocumentationProvider _documentation;
         private readonly ILogger _logger;
+        private readonly IReadOnlyList<IMcpToolSource> _toolSources;
 
         private readonly object _sync = new object();
         private long _cachedVersion = -1;
@@ -75,13 +78,15 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             IOptions<NabuMcpOptions> options,
             JsonSchemaGenerator schemaGenerator,
             IXmlDocumentationProvider documentation,
-            ILogger<McpToolRegistry>? logger = null)
+            ILogger<McpToolRegistry>? logger = null,
+            IEnumerable<IMcpToolSource>? toolSources = null)
         {
             _actionProvider = actionProvider;
             _options = (options ?? throw new ArgumentNullException(nameof(options))).Value;
             _schemaGenerator = schemaGenerator ?? throw new ArgumentNullException(nameof(schemaGenerator));
             _documentation = documentation ?? NullXmlDocumentationProvider.Instance;
             _logger = (ILogger?)logger ?? NullLogger.Instance;
+            _toolSources = toolSources as IReadOnlyList<IMcpToolSource> ?? toolSources?.ToList() ?? (IReadOnlyList<IMcpToolSource>)NoToolSources;
         }
 
         public IReadOnlyList<McpToolDescriptor> GetTools()
@@ -192,8 +197,52 @@ namespace Nabu.Mcp.AspNetCore.Discovery
             BuildEndpointTools(results, used);
 #endif
 
+            BuildSourceTools(results, used);
+
             results.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
             return results;
+        }
+
+        /// <summary>
+        /// Appends the tools contributed by registered <see cref="IMcpToolSource"/> implementations.
+        /// A source owns its own naming; a name already claimed by an HTTP tool or an earlier source
+        /// is skipped with a warning rather than renamed, because the descriptor's identity - and any
+        /// metadata its source attached to it - must survive intact.
+        /// </summary>
+        private void BuildSourceTools(List<McpToolDescriptor> results, ISet<string> usedNames)
+        {
+            foreach (var source in _toolSources)
+            {
+                IReadOnlyList<McpToolDescriptor> tools;
+                try
+                {
+                    tools = source.GetTools();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Nabu MCP tool source {Source} failed to contribute tools.", source.GetType().FullName);
+                    continue;
+                }
+
+                foreach (var tool in tools)
+                {
+                    if (_options.ToolFilter != null && !_options.ToolFilter(tool))
+                    {
+                        continue;
+                    }
+
+                    if (!usedNames.Add(tool.Name))
+                    {
+                        _logger.LogWarning(
+                            "Nabu MCP tool source {Source} contributed '{Tool}', but that name is already taken; the tool is skipped. Give it a unique name.",
+                            source.GetType().FullName,
+                            tool.Name);
+                        continue;
+                    }
+
+                    results.Add(tool);
+                }
+            }
         }
 
         /// <summary>

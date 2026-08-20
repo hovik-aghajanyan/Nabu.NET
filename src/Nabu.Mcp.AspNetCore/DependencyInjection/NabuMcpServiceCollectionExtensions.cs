@@ -79,7 +79,8 @@ namespace Nabu.Mcp.AspNetCore
                 sp.GetRequiredService<IOptions<NabuMcpOptions>>(),
                 sp.GetRequiredService<JsonSchemaGenerator>(),
                 sp.GetRequiredService<IXmlDocumentationProvider>(),
-                sp.GetService<ILogger<McpToolRegistry>>()));
+                sp.GetService<ILogger<McpToolRegistry>>(),
+                sp.GetServices<IMcpToolSource>()));
 #else
             // Both discovery sources are optional: an app without controllers still exposes its
             // Minimal API endpoints, and vice versa.
@@ -90,7 +91,8 @@ namespace Nabu.Mcp.AspNetCore
                 sp.GetRequiredService<IXmlDocumentationProvider>(),
                 sp.GetService<Microsoft.AspNetCore.Routing.EndpointDataSource>(),
                 sp.GetService<IServiceProviderIsService>(),
-                sp.GetService<ILogger<McpToolRegistry>>()));
+                sp.GetService<ILogger<McpToolRegistry>>(),
+                sp.GetServices<IMcpToolSource>()));
 #endif
 
             services.TryAddSingleton(sp => McpJsonCompatibility.Detect(

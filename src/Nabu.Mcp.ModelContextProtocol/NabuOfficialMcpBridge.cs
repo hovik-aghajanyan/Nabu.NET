@@ -80,10 +80,20 @@ namespace Nabu.Mcp.ModelContextProtocol
                 }
             }
 
+            // Tools contributed by a non-HTTP source name their own invoker; everything else is
+            // replayed through the HTTP pipeline, exactly as on the built-in protocol layer.
+            var invoker = _invoker;
+            if (tool!.InvokerType != null)
+            {
+                invoker = httpContext.RequestServices.GetService(tool.InvokerType) as IMcpToolInvoker
+                    ?? throw new InvalidOperationException(
+                        "Tool '" + tool.Name + "' names " + tool.InvokerType + " as its invoker, but that service is not registered.");
+            }
+
             McpToolInvocationResult invocation;
             try
             {
-                invocation = await _invoker.InvokeAsync(tool!, arguments, httpContext, cancellationToken).ConfigureAwait(false);
+                invocation = await invoker.InvokeAsync(tool!, arguments, httpContext, cancellationToken).ConfigureAwait(false);
             }
             catch (McpArgumentException ex)
             {
